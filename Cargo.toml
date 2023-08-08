@@ -5,12 +5,11 @@ edition = "2021"
 
 [dependencies]
 sqlx = { version = "0.7.1", features = [ "runtime-tokio-rustls", "postgres", "macros", "uuid", "chrono"] }
-dotenv = "0.15.0"
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 anyhow = "1.0.72"
 uuid = {version = "1.4.1", features = ["serde"]}
-chrono = { version = "0.4.26", features = ["serde"] }
+chrono = { version = "0.4.26", default-features = false, features = ["serde"] }
 axum = "0.6.20"
 tracing = "0.1.35"
 serde = { version = "1.0.159", features = ["derive"] }
@@ -18,6 +17,3 @@ tracing-subscriber = "0.3.17"
 tower-http = { version = "0.4.0", features = ["cors"] }
 validator = "0.16.1"
 serde_json = "1.0.95"
-
-[profile.dev.package.sqlx-macros]
-opt-level = 3
