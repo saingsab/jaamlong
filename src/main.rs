@@ -35,7 +35,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-
+    tracing_subscriber::fmt()
+    .with_max_level(tracing::Level::DEBUG)
+    .init();
 
     let cors = CorsLayer::new()
     .allow_origin("http://localhost:8000".parse::<HeaderValue>().unwrap())
