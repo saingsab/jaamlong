@@ -1,17 +1,17 @@
 use std::sync::Arc;
 use axum::{ extract::State, Json, http::StatusCode, response::IntoResponse };
-use crate::database::model::network::Network;
+use crate::database::model::token_address::TokenAddress;
 use crate::http::AppState;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkRequest {
+pub struct TokenAddressRequest {
     id: Uuid,
 }
 
-pub async fn get_all_networks(State(data): State<Arc<AppState>>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let networks = Network::get_all_networks(&data.db).await;
+pub async fn get_all_token_addresses(State(data): State<Arc<AppState>>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let networks = TokenAddress::get_all_token_address(&data.db).await;
 
     if networks.is_err() {
         let error_response = serde_json::json!({
@@ -32,9 +32,9 @@ pub async fn get_all_networks(State(data): State<Arc<AppState>>) -> Result<impl 
 
 }
 
-pub async fn get_network_by_id(State(data): State<Arc<AppState>>, Json(payload): Json<NetworkRequest>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+pub async fn get_token_address_by_id(State(data): State<Arc<AppState>>, Json(payload): Json<TokenAddressRequest>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     
-    let networks = Network::get_network_by_id(&data.db, payload.id).await;
+    let networks = TokenAddress::get_token_address_by_id(&data.db, payload.id).await;
 
     if networks.is_err() {
         let error_response = serde_json::json!({
