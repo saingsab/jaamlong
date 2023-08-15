@@ -257,10 +257,8 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
         receiver_address: payload.receiver_address.clone(),
         transfer_amount: (BRIDGE_FEE + U256::from(payload.transfer_amount)).to_string(),
         gas_limit: est_gas_price.to_string(),
-        max_priority_fee_per_gas: (BRIDGE_FEE + U256::from(payload.transfer_amount)).to_string(),
+        max_priority_fee_per_gas: (U256::from(0)).to_string(),
         max_fee_per_gas: (BRIDGE_FEE + U256::from(payload.transfer_amount)).to_string()
-
-
     };
 
     let inserted_tx = RequestInsertTx {
