@@ -6,9 +6,9 @@ use axum::{
 
 use crate::{
     http::{controller::{
-        transaction_controller::{ get_all_tx, validate_tx},
+        transaction_controller::{ get_all_tx, validate_tx, confirm_tx},
         network_controller::{get_all_networks, get_network_by_id, },
-        token_address_controller::{get_all_token_addresses, get_token_address_by_id,},
+        token_address_controller::{get_all_token_addresses, get_token_address_by_id},
         user::{create_user},
 
     }, utils::transaction_module::validate_account}
@@ -25,6 +25,7 @@ pub fn create_router(app_state: Arc<AppState>) -> Router {
         .route("/get_network", get(get_network_by_id))
         .route("/get_token_addresses", get(get_all_token_addresses))
         .route("/validate_tx", post(validate_tx))
+        .route("/confirm_tx", post(confirm_tx))
         // .route("/api/notes", get(note_list_handler))
         // .route(
         //     "/api/notes/:id",

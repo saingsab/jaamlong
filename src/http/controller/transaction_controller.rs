@@ -53,8 +53,9 @@ pub struct ResponseTransaction {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct TestPayload {
-    data: String
+pub struct TransactionHash {
+    hash: String,
+    network: Uuid
 }
 
 pub async fn get_all_tx(State(data): State<Arc<AppState>>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -102,19 +103,29 @@ pub async fn get_all_tx(State(data): State<Arc<AppState>>) -> Result<impl IntoRe
 //     Ok(Json(json_response))
 // }
 
-// testing post request
-// pub async fn test_insert(State(data): State<Arc<AppState>>, Json(payload): Json<TestPayload>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+// handle tx validation
+pub async fn confirm_tx(State(data): State<Arc<AppState>>, Json(payload): Json<TransactionHash>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     
-//     println!("Received data: {:?}", &payload.data);
-//     let data = &payload.data;
+    println!("Transaction Hash: {:?}", &payload.hash);
+    let tx_hash = payload.hash;
 
-//     let json_response = serde_json::json!({
-//         "status": "success",
-//         "data": data
-//     });
-
-//     Ok(Json(json_response))
-// }
+    match transaction_module::validate_confirmed_block(&data.db, payload.network, tx_hash).await {
+        Ok(flag) => {
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": flag
+            });
+            return Ok(Json(json_response));
+        },
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": format!("Err: {}", err)
+            });
+            return Ok(Json(json_response))
+        }
+    };
+}
 
 pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<RequestedTransaction>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     //validate request body
