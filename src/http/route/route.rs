@@ -5,22 +5,18 @@ use axum::{
 };
 
 use crate::{
-    http::{controller::{
+    http::
+    controller::{
         transaction_controller::{ get_all_tx, validate_tx, confirm_tx},
         network_controller::{get_all_networks, get_network_by_id, },
-        token_address_controller::{get_all_token_addresses, get_token_address_by_id},
-        user::{create_user},
-
-    }, utils::transaction_module::validate_account}
-    ,
+        token_address_controller::get_all_token_addresses
+    }, 
     http::AppState,
 };
 
 pub fn create_router(app_state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(get_all_tx))
-        // .route("/create_tx", post(insert_tx))
-        // .route("/test_insert", post(test_insert))
         .route("/all_networks", get(get_all_networks))
         .route("/get_network", get(get_network_by_id))
         .route("/get_token_addresses", get(get_all_token_addresses))

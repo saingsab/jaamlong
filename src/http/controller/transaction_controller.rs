@@ -80,29 +80,6 @@ pub async fn get_all_tx(State(data): State<Arc<AppState>>) -> Result<impl IntoRe
     Ok(Json(json_response))
 }
 
-// pub async fn insert_tx(State(data): State<Arc<AppState>>, payload: RequestInsertTx) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    
-//     let create_new_tx = Transaction::create(
-//         &data.db, 
-//         payload
-//     ).await;
-
-//     if create_new_tx.is_err() {
-//         let error_response = serde_json::json!({
-//             "status": "fail",
-//             "message": "Failed to create new transaction",
-//         });
-//         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)));
-//     }
-    
-//     let json_response = serde_json::json!({
-//         "status": "success",
-//         "data": create_new_tx.unwrap()
-//     });
-
-//     Ok(Json(json_response))
-// }
-
 // handle tx validation
 pub async fn confirm_tx(State(data): State<Arc<AppState>>, Json(payload): Json<TransactionHash>) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     
@@ -149,7 +126,7 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
 
     //validate account
     match transaction_module::validate_account(&data.db, (payload.origin_network).unwrap(), Address::from_str((payload.sender_address).as_str()).unwrap()).await {
-        Ok(network) => {},
+        Ok(_network) => {},
         Err(err) => {
             let error_message = format!("Error: {}", err);
             let json_response = serde_json::json!({
@@ -161,7 +138,7 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
     }
 
     match transaction_module::validate_account(&data.db, (payload.destin_network).unwrap(), Address::from_str((payload.receiver_address).as_str()).unwrap()).await {
-        Ok(network) => {},
+        Ok(_network) => {},
         Err(err) => {
             let error_message = format!("Error: {}", err);
             let json_response = serde_json::json!({
@@ -235,7 +212,7 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
         } 
     };
 
-    let BRIDGE_FEE: U256 = U256::from(100000);
+    let bridge_fee: U256 = U256::from(100000);
 
     let call_req = CallRequest {
         from: Some(H160::from_str((payload.sender_address.clone()).as_str()).unwrap()),
@@ -266,10 +243,10 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
     let response_tx = ResponseTransaction {
         sender_address: payload.sender_address.clone(),
         receiver_address: payload.receiver_address.clone(),
-        transfer_amount: (BRIDGE_FEE + U256::from(payload.transfer_amount)).to_string(),
+        transfer_amount: (bridge_fee + U256::from(payload.transfer_amount)).to_string(),
         gas_limit: est_gas_price.to_string(),
         max_priority_fee_per_gas: (U256::from(0)).to_string(),
-        max_fee_per_gas: (BRIDGE_FEE + U256::from(payload.transfer_amount)).to_string()
+        max_fee_per_gas: (bridge_fee + U256::from(payload.transfer_amount)).to_string()
     };
 
     let inserted_tx = RequestInsertTx {
@@ -281,7 +258,7 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
         destin_network: Some(validated_destinated_network.id),
         asset_type: payload.asset_type,
         transfer_amount: payload.transfer_amount,
-        bridge_fee: BRIDGE_FEE.as_u64() as i64,
+        bridge_fee: bridge_fee.as_u64() as i64,
         tx_status: Some(Uuid::from_u128(0)),
         created_by: Some(Uuid::new_v4())
     };

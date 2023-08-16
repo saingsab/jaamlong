@@ -1,5 +1,4 @@
 use crate::database::model::token_address::TokenAddress;
-use chrono::Utc;
 use serde::Serialize;
 use sqlx::{ Pool, Postgres};
 use uuid::Uuid;

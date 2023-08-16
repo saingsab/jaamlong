@@ -1,7 +1,4 @@
-use std::str::FromStr;
-
 use anyhow::Error;
-use serde::Deserialize;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
 use web3::types::{Address, U256, U64, H256, BlockId};
