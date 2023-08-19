@@ -1,15 +1,21 @@
-pub mod controller;
-pub mod route;
-pub mod utils;
+// pub mod utils;
+pub mod transaction_handler;
+pub mod network_handler;
+pub mod token_address_handler;
+use crate::utils;
+
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
-// use axum::{response::IntoResponse, routing::get, Json, Router};
 use std::sync::Arc;
-use axum::http::{
+use axum::{http::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     HeaderValue, Method,
-};
+}, Router};
 use tower_http::cors::CorsLayer;
-use route::route::create_router;
+use crate::routers::{
+    transaction_routes::transaction_routes,
+    network_routes::network_routes,
+    token_address_routes::token_address_routes,
+};
 
 pub struct AppState {
     db: Pool<Postgres>,
@@ -43,7 +49,11 @@ pub async fn start() -> anyhow::Result<()> {
     .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE]);
     
     // database::transact(pool.clone()).await?;
-    let app = create_router(Arc::new(AppState { db: pool.clone() })).layer(cors);
+    let app = Router::new()
+        .merge(transaction_routes(Arc::new(AppState { db: pool.clone() })))
+        .merge(network_routes(Arc::new(AppState { db: pool.clone() })))
+        .merge(token_address_routes(Arc::new(AppState { db: pool.clone() })))
+        .layer(cors);
 
 
     println!("🚀 Server started successfully");

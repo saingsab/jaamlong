@@ -1,7 +1,17 @@
 use uuid::Uuid;
-use crate::database::model::network::Network;
-use sqlx::{ Pool, Postgres};
+use chrono::{DateTime, Utc};
+use sqlx::{ FromRow, Pool, Postgres};
 use serde::{Deserialize, Serialize};
+
+
+#[derive(Debug, FromRow)]
+pub struct Network {
+    pub id: Uuid,
+    pub network_name: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ResponseNetwork {

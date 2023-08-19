@@ -2,11 +2,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use axum::{ extract::State, Json, http::StatusCode, response::IntoResponse };
 use web3::types::{U256, Address, H160, CallRequest};
-use crate::database::{model::{
-    transaction::Transaction,  network::Network, token_address::TokenAddress},
-    utils::transaction::RequestInsertTx,
+use crate::models::{
+    transaction::{Transaction, RequestInsertTx}, network::Network, token_address::TokenAddress
 };
-use crate::http::{
+
+use crate::handlers::{
     utils::transaction_module,
     AppState
 };
@@ -87,16 +87,16 @@ pub async fn confirm_tx(State(data): State<Arc<AppState>>, Json(payload): Json<T
     let tx_hash = payload.hash;
 
     match transaction_module::validate_confirmed_block(&data.db, payload.network, tx_hash).await {
-        Ok(flag) => {
+        Ok(receipt) => {
             let json_response = serde_json::json!({
                 "status": "success",
-                "data": flag
+                "data": receipt
             });
             return Ok(Json(json_response));
         },
         Err(err) => {
             let json_response = serde_json::json!({
-                "status": "success",
+                "status": "fail",
                 "data": format!("Err: {}", err)
             });
             return Ok(Json(json_response))
@@ -212,7 +212,8 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
         } 
     };
 
-    let bridge_fee: U256 = U256::from(100000);
+    // perform bridge fee calucaltion
+    let bridge_fee: U256 = U256::from(100000);  //mark as constant fee, temporily
 
     let call_req = CallRequest {
         from: Some(H160::from_str((payload.sender_address.clone()).as_str()).unwrap()),
@@ -249,6 +250,8 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
         max_fee_per_gas: (bridge_fee + U256::from(payload.transfer_amount)).to_string()
     };
 
+    // let creator_trim = hex::decode(&payload.sender_address.clone().trim_start_matches("0x")).unwrap();
+
     let inserted_tx = RequestInsertTx {
         sender_address: payload.sender_address.clone(),
         receiver_address: payload.receiver_address.clone(),
@@ -260,7 +263,7 @@ pub async fn validate_tx(State(data): State<Arc<AppState>>, Json(payload): Json<
         transfer_amount: payload.transfer_amount,
         bridge_fee: bridge_fee.as_u64() as i64,
         tx_status: Some(Uuid::from_u128(0)),
-        created_by: Some(Uuid::new_v4())
+        created_by: payload.created_by
     };
 
     //insert unconfirmed tx to database

@@ -1,9 +1,9 @@
 use anyhow::Error;
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
-use web3::types::{Address, U256, U64, H256, BlockId};
+use web3::types::{TransactionReceipt, Address, U256, U64, H256, BlockId};
 use web3::types::CallRequest;
-use crate::database::model::network::Network;
+use crate::models::network::Network;
 
 // static MINIMUN_BLOCK_CONFIRMATION: U64 = U64::from(2);
 
@@ -51,7 +51,7 @@ pub async fn get_current_block(pool: &Pool<Postgres>, id: Uuid,) -> Result<U64, 
     Ok(current_block)
 }
 
-pub async fn validate_confirmed_block(pool: &Pool<Postgres>, id: Uuid, hash: String) -> Result<bool, Error> {
+pub async fn validate_confirmed_block(pool: &Pool<Postgres>, id: Uuid, hash: String) -> Result<TransactionReceipt, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
     let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
 
@@ -66,7 +66,7 @@ pub async fn validate_confirmed_block(pool: &Pool<Postgres>, id: Uuid, hash: Str
 
     let tx_receipt = web3.eth().transaction_receipt(hash_as_h256).await?;
 
-    match tx_receipt {
+    match &tx_receipt {
         Some(tx) => {
             //calculate confirmation block
             let block_hash = BlockId::Hash(tx.block_hash.unwrap_or_default());
@@ -80,23 +80,18 @@ pub async fn validate_confirmed_block(pool: &Pool<Postgres>, id: Uuid, hash: Str
                 None => return Err(Error::msg("Eth Block not found"))
             };
 
-            println!("Transaction Block: {}", &eth_block);
-
             let block_confirmation = current_block - eth_block;
-            println!("Block Confirmation: {}", &block_confirmation);
-            // let (_, flag) = block_confirmation.overflowing_add(U64::from(2));
+            // println!("Block Confirmation: {}", &block_confirmation);
 
-            if block_confirmation.is_zero() {
-                return Err(Error::msg("Block confirmation less than 2, failed"))
-            } else {
-                match block_confirmation.checked_sub(U64::from(2)) {
-                    Some(block_num) => {
-                        println!("Number of Confirmation Blocks: {}", &block_num);
-                        return Ok(true)
-                    },
-                    None => return Err(Error::msg("Minimum block confirmation must greater than 0"))
-                }  
-            }
+            //check if block_confirmation is greater than 2. Negative numbers return None
+            match &block_confirmation.checked_sub(U64::from(2)) {
+                Some(_block_num) => {
+                    println!("Success, Number of Confirmation Blocks: {}", &block_confirmation);
+                    return Ok(tx.clone())
+                },
+                None => return Err(Error::msg("Minimum block confirmation must greater than 2"))
+            }  
+            
 
         },
         None => {
