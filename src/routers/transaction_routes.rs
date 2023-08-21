@@ -1,13 +1,10 @@
-use std::sync::Arc;
+use crate::handlers::transaction_handler::{confirm_tx, get_all_tx, validate_tx};
+use crate::AppState;
 use axum::{
     routing::{get, post},
     Router,
 };
-
-use crate::{
-    handlers::transaction_handler::{ get_all_tx, validate_tx, confirm_tx}, 
-    handlers::AppState,
-};
+use std::sync::Arc;
 
 pub fn transaction_routes(app_state: Arc<AppState>) -> Router {
     Router::new()

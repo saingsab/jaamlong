@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use sqlx::{ Pool, FromRow, Postgres, postgres::PgQueryResult};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgQueryResult, FromRow, Pool, Postgres};
 use uuid::Uuid;
 
 #[derive(Debug, FromRow, Deserialize, Serialize)]
@@ -16,6 +16,8 @@ pub struct Transaction {
     pub transfer_amount: i64,
     pub bridge_fee: i64,
     pub tx_status: Option<Uuid>,
+    pub origin_tx_hash: Option<String>,
+    pub destin_tx_hash: Option<String>,
     pub created_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -32,6 +34,8 @@ pub struct RequestInsertTx {
     pub transfer_amount: i64,
     pub bridge_fee: i64,
     pub tx_status: Option<Uuid>,
+    pub origin_tx_hash: Option<String>,
+    pub destin_tx_hash: Option<String>,
     pub created_by: Option<Uuid>,
 }
 
@@ -51,6 +55,8 @@ impl Transaction {
                 transfer_amount,
                 bridge_fee,
                 tx_status,
+                origin_tx_hash,
+                destin_tx_hash,
                 created_by,
                 created_at,
                 updated_at
@@ -59,40 +65,101 @@ impl Transaction {
         )
         .fetch_all(pool)
         .await?;
+        let mut transaction_vec: Vec<Transaction> = Vec::new();
+        for transaction in &transactions {
+            let new_transaction = Transaction {
+                id: transaction.id,
+                sender_address: transaction.sender_address.clone(),
+                receiver_address: transaction.receiver_address.clone(),
+                from_token_address: transaction.from_token_address.clone(),
+                to_token_address: transaction.to_token_address.clone(),
+                origin_network: transaction.origin_network,
+                destin_network: transaction.destin_network,
+                asset_type: transaction.asset_type,
+                transfer_amount: transaction.transfer_amount.unwrap_or(0),
+                bridge_fee: transaction.bridge_fee.unwrap_or(0),
+                tx_status: transaction.tx_status,
+                origin_tx_hash: transaction.origin_tx_hash.clone(),
+                destin_tx_hash: transaction.destin_tx_hash.clone(),
+                created_by: transaction.created_by,
+                created_at: match transaction.created_at {
+                    Some(date) => date,
+                    None => Utc::now(),
+                },
+                updated_at: match transaction.updated_at {
+                    Some(date) => date,
+                    None => Utc::now(),
+                },
+            };
+            transaction_vec.push(new_transaction);
+        }
+        Ok(transaction_vec)
+    }
 
-    let mut transaction_vec: Vec<Transaction> = Vec::new();
+    pub async fn get_transaction(
+        pool: &Pool<Postgres>,
+        id: Uuid,
+    ) -> Result<Transaction, sqlx::Error> {
+        let transaction = sqlx::query!(
+            r#"
+                SELECT 
+                    id,
+                    sender_address,
+                    receiver_address,
+                    from_token_address,
+                    to_token_address,
+                    origin_network,
+                    destin_network,
+                    asset_type,
+                    transfer_amount,
+                    bridge_fee,
+                    tx_status,
+                    origin_tx_hash,
+                    destin_tx_hash,
+                    created_by,
+                    created_at,
+                    updated_at
+                FROM tbl_transactions WHERE id = $1
+                "#,
+            id
+        )
+        .fetch_one(pool)
+        .await?;
 
-    for transaction in &transactions {
-        
-        let new_transaction = Transaction {
+        let transaction_response = Transaction {
             id: transaction.id,
             sender_address: transaction.sender_address.clone(),
             receiver_address: transaction.receiver_address.clone(),
             from_token_address: transaction.from_token_address.clone(),
             to_token_address: transaction.to_token_address.clone(),
-            origin_network: transaction.origin_network.clone(),
-            destin_network: transaction.destin_network.clone(),
-            asset_type: transaction.asset_type.clone(),
-            transfer_amount: match transaction.transfer_amount { Some(amount) => amount, None => 0},
-            bridge_fee: match transaction.bridge_fee { Some(amount) => amount, None => 0},
-            tx_status: transaction.tx_status.clone(),
-            created_by: transaction.created_by.clone(),
-            created_at: match transaction.created_at { Some(date) => date.clone(), None => Utc::now()},
-            updated_at: match transaction.updated_at { Some(date) => date.clone(), None => Utc::now()}
+            origin_network: transaction.origin_network,
+            destin_network: transaction.destin_network,
+            asset_type: transaction.asset_type,
+            transfer_amount: transaction.transfer_amount.unwrap_or(0),
+            bridge_fee: transaction.bridge_fee.unwrap_or(0),
+            tx_status: transaction.tx_status,
+            origin_tx_hash: transaction.origin_tx_hash.clone(),
+            destin_tx_hash: transaction.destin_tx_hash.clone(),
+            created_by: transaction.created_by,
+            created_at: match transaction.created_at {
+                Some(date) => date,
+                None => Utc::now(),
+            },
+            updated_at: match transaction.updated_at {
+                Some(date) => date,
+                None => Utc::now(),
+            },
         };
-        transaction_vec.push(new_transaction);
-    }
-    
-        Ok(transaction_vec)
+        Ok(transaction_response)
     }
 
     pub async fn create(
         pool: &Pool<Postgres>,
-        tx: RequestInsertTx
+        tx: RequestInsertTx,
     ) -> Result<Transaction, sqlx::Error> {
         // let mut pool = pool.acquire().await?;
         let id: Uuid = sqlx::query!(
-            "INSERT INTO tbl_transactions (sender_address, receiver_address, from_token_address, to_token_address, origin_network, destin_network, asset_type, transfer_amount, bridge_fee, tx_status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+            "INSERT INTO tbl_transactions (sender_address, receiver_address, from_token_address, to_token_address, origin_network, destin_network, asset_type, transfer_amount, bridge_fee, tx_status, origin_tx_hash, destin_tx_hash, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
             tx.sender_address,
             tx.receiver_address,
             tx.from_token_address,
@@ -103,12 +170,13 @@ impl Transaction {
             tx.transfer_amount,
             tx.bridge_fee,
             tx.tx_status,
+            tx.origin_tx_hash,
+            tx.destin_tx_hash,
             tx.created_by,
         )
         .fetch_one(pool)
         .await?
         .id;
-
         Ok(Transaction {
             id,
             sender_address: tx.sender_address.to_owned(),
@@ -121,6 +189,8 @@ impl Transaction {
             transfer_amount: tx.transfer_amount,
             bridge_fee: tx.bridge_fee,
             tx_status: tx.tx_status,
+            origin_tx_hash: None,
+            destin_tx_hash: None,
             created_by: tx.created_by,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -142,5 +212,40 @@ impl Transaction {
         Ok(result)
     }
 
+    pub async fn update_tx_hash(
+        pool: &Pool<Postgres>,
+        id: Uuid,
+        origin_tx_hash: Option<String>,
+        destin_tx_hash: Option<String>,
+    ) -> Result<PgQueryResult, sqlx::Error> {
+        let result = sqlx::query!(
+            "UPDATE tbl_transactions SET origin_tx_hash = $1, destin_tx_hash = $2, updated_at = NOW() WHERE id = $3",
+            origin_tx_hash,
+            destin_tx_hash,
+            id
+        )
+        .execute(pool)
+        .await?;
+        Ok(result)
+    }
 
+    pub async fn get_tx_status(
+        pool: &Pool<Postgres>,
+        id: Uuid,
+    ) -> Result<Option<Uuid>, sqlx::Error> {
+        let transaction = sqlx::query!(
+            r#"
+                SELECT 
+                    id,
+                    tx_status,
+                    created_at,
+                    updated_at
+                FROM tbl_transactions WHERE id = $1
+                "#,
+            id
+        )
+        .fetch_one(pool)
+        .await?;
+        Ok(transaction.tx_status)
+    }
 }
