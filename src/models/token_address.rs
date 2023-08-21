@@ -1,8 +1,18 @@
-use crate::database::model::token_address::TokenAddress;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::{ Pool, Postgres};
+use sqlx::{ FromRow, Pool, Postgres};
 use uuid::Uuid;
+
+#[derive(Debug, FromRow)]
+pub struct TokenAddress {
+    pub id: Uuid,
+    pub token_address: String,
+    pub token_symbol: String,
+    pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 
 #[derive(Serialize)]
 pub struct ResponseTokenAddress {

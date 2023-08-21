@@ -1,11 +1,13 @@
-pub mod http;
-pub mod database;
+pub mod handlers;
+pub mod routers;
+pub mod models;
+pub mod utils;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
 
     //start server
-    http::start().await?;
+    handlers::start().await?;
 
     Ok(())
 }

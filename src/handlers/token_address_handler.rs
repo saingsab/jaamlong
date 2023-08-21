@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use axum::{ extract::State, Json, http::StatusCode, response::IntoResponse };
-use crate::database::model::token_address::TokenAddress;
-use crate::http::AppState;
+use crate::models::token_address::TokenAddress;
+use crate::handlers::AppState;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 
