@@ -13,7 +13,7 @@ pub struct TokenAddress {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ResponseTokenAddress {
     pub id: Uuid,
     pub token_address: String,
