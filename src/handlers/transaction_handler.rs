@@ -1,17 +1,21 @@
-use crate::models::{
-    network::Network,
-    token_address::TokenAddress,
-    transaction::{RequestInsertTx, Transaction},
+use crate::AppState;
+use crate::{
+    models::{
+        network::Network,
+        token_address::TokenAddress,
+        transaction::{RequestInsertTx, Transaction},
+    },
+    utils::transaction_module::{
+        broadcast_tx, get_base_fee, get_est_gas_price, get_gas_price, token_converter,
+        validate_account,
+    },
 };
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
-use web3::types::{Address, CallRequest, H160, U256};
-
-use crate::utils::transaction_module;
-use crate::AppState;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use web3::types::{Address, CallRequest, H160, U256};
 
 #[derive(Deserialize, Serialize)]
 pub struct CreateTransaction {
@@ -37,7 +41,7 @@ pub struct RequestedTransaction {
     origin_network: Option<Uuid>,
     destin_network: Option<Uuid>,
     asset_type: Option<Uuid>,
-    transfer_amount: i64,
+    transfer_amount: f64,
     created_by: Option<Uuid>,
 }
 
@@ -46,10 +50,10 @@ pub struct ResponseTransaction {
     id: Uuid,
     sender_address: String,
     receiver_address: String,
-    transfer_amount: String,
+    transfer_amount: u64,
     gas_limit: String,
-    max_priority_fee_per_gas: String,
-    max_fee_per_gas: String,
+    max_priority_fee_per_gas: i64,
+    max_fee_per_gas: u64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -119,7 +123,7 @@ pub async fn confirm_tx(
             return Ok(Json(json_response));
         }
     }
-    match transaction_module::broadcast_tx(&data.db, network.id, payload.id, payload.hash).await {
+    match broadcast_tx(&data.db, network.id, payload.id, payload.hash).await {
         Ok(receipt) => {
             let json_response = serde_json::json!({
                 "status": "success",
@@ -157,9 +161,15 @@ pub async fn validate_tx(
         return Ok(generate_error_response("Asset Type"));
     } else if payload.created_by.is_none() {
         return Ok(generate_error_response("Creator"));
+    } else if payload.transfer_amount <= 0.00 {
+        let json_response = serde_json::json!({
+            "status": "Request Body Failed",
+            "data": "Amount must greater than zero",
+        });
+        return Ok(Json(json_response));
     }
     // validate sender account
-    transaction_module::validate_account(
+    validate_account(
         &data.db,
         (payload.origin_network).unwrap(),
         Address::from_str((payload.sender_address).as_str()).unwrap(),
@@ -167,7 +177,7 @@ pub async fn validate_tx(
     .await
     .unwrap_or_default();
     // validate receiver address
-    transaction_module::validate_account(
+    validate_account(
         &data.db,
         (payload.destin_network).unwrap(),
         Address::from_str((payload.receiver_address).as_str()).unwrap(),
@@ -179,7 +189,7 @@ pub async fn validate_tx(
         match Network::get_network_by_id(&data.db, payload.origin_network.unwrap()).await {
             Ok(network) => network,
             Err(err) => {
-                let error_message = format!("Error retrieving network: {}", err);
+                let error_message = format!("Error retrieving origin network: {}", err);
                 let json_response = serde_json::json!({
                     "status": "fail",
                     "data": error_message
@@ -192,7 +202,7 @@ pub async fn validate_tx(
         match Network::get_network_by_id(&data.db, payload.destin_network.unwrap()).await {
             Ok(network) => network,
             Err(err) => {
-                let error_message = format!("Error retrieving network: {}", err);
+                let error_message = format!("Error retrieving destin network: {}", err);
                 let json_response = serde_json::json!({
                     "status": "fail",
                     "data": error_message
@@ -201,7 +211,7 @@ pub async fn validate_tx(
             }
         };
     //validate tokenID
-    let validated_from_token_id =
+    let validated_from_token =
         match TokenAddress::get_token_address_by_id(&data.db, payload.from_token_address).await {
             Ok(network) => network,
             Err(err) => {
@@ -213,7 +223,7 @@ pub async fn validate_tx(
                 return Ok(Json(json_response));
             }
         };
-    let validated_to_token_id =
+    let validated_to_token =
         match TokenAddress::get_token_address_by_id(&data.db, payload.to_token_address).await {
             Ok(network) => network,
             Err(err) => {
@@ -226,12 +236,7 @@ pub async fn validate_tx(
             }
         };
     //query gas_price
-    let current_gas_price = match transaction_module::get_gas_price(
-        &data.db,
-        (payload.origin_network).unwrap(),
-    )
-    .await
-    {
+    let current_gas_price = match get_gas_price(&data.db, (payload.origin_network).unwrap()).await {
         Ok(gas_price) => gas_price,
         Err(err) => {
             let error_message = format!("Error Gas Price: {}", err);
@@ -242,30 +247,18 @@ pub async fn validate_tx(
             return Ok(Json(json_response));
         }
     };
-    // perform bridge fee calucaltion
-    let call_req = CallRequest {
-        from: Some(H160::from_str(payload.sender_address.clone().as_str()).unwrap()),
-        to: Some(H160::from_str(payload.receiver_address.clone().as_str()).unwrap()),
-        gas: None,
-        gas_price: Some(current_gas_price),
-        value: Some(U256::from(payload.transfer_amount)),
-        data: None,
-        transaction_type: None,
-        access_list: None,
-        max_fee_per_gas: None,
-        max_priority_fee_per_gas: None,
-    };
-    //estimated_gas_price
-    let est_gas_price = match transaction_module::get_est_gas_price(
+    // perform token conversion
+    let transfer_value = match token_converter(
         &data.db,
-        (payload.origin_network).unwrap(),
-        call_req,
+        validated_origin_network.id,
+        validated_from_token.id,
+        payload.transfer_amount,
     )
     .await
     {
-        Ok(gas_price) => gas_price,
+        Ok(value) => value,
         Err(err) => {
-            let error_message = format!("Error retrieving network: {}", err);
+            let error_message = format!("Error converting token value: {}", err);
             let json_response = serde_json::json!({
                 "status": "fail",
                 "data": error_message
@@ -273,19 +266,63 @@ pub async fn validate_tx(
             return Ok(Json(json_response));
         }
     };
+    let call_req = CallRequest {
+        from: Some(H160::from_str(payload.sender_address.clone().as_str()).unwrap()),
+        to: Some(H160::from_str(payload.receiver_address.clone().as_str()).unwrap()),
+        gas: None,
+        gas_price: Some(current_gas_price),
+        value: Some(U256::from(transfer_value)),
+        data: None,
+        transaction_type: None,
+        access_list: None,
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
+    };
+    //estimated_gas_price and balance validation
+    let est_gas_price =
+        match get_est_gas_price(&data.db, (payload.origin_network).unwrap(), call_req).await {
+            Ok(gas_price) => gas_price,
+            Err(err) => {
+                let error_message = format!("Error retrieving est gas price: {}", err);
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": error_message
+                });
+                return Ok(Json(json_response));
+            }
+        };
     // println!("UUid NativeToken: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()));
     // println!("UUid ERC20Token: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()));
-    let temp_bridge_fee: U256 = U256::from(100000); //mark as constant fee, temporily
+    // Calculation of the bridge fee as needed
+    const TEMP_FEE: f64 = 0.001;
+    let temp_bridge_fee = match token_converter(
+        &data.db,
+        validated_origin_network.id,
+        validated_from_token.id,
+        TEMP_FEE,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            let error_message = format!("Error retrieving est gas price: {}", err);
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": error_message
+            });
+            return Ok(Json(json_response));
+        }
+    }; //mark as constant fee, temporily
     let inserted_tx = RequestInsertTx {
         sender_address: payload.sender_address.clone(),
         receiver_address: payload.receiver_address.clone(),
-        from_token_address: validated_from_token_id.id.to_string(),
-        to_token_address: validated_to_token_id.id.to_string(),
+        from_token_address: validated_from_token.id.to_string(),
+        to_token_address: validated_to_token.id.to_string(),
         origin_network: Some(validated_origin_network.id),
         destin_network: Some(validated_destinated_network.id),
         asset_type: payload.asset_type,
-        transfer_amount: payload.transfer_amount,
-        bridge_fee: temp_bridge_fee.as_u64() as i64,
+        transfer_amount: transfer_value as i64,
+        bridge_fee: temp_bridge_fee as i64,
         tx_status: Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "Unconfirmed".as_bytes())),
         origin_tx_hash: None,
         destin_tx_hash: None,
@@ -305,15 +342,31 @@ pub async fn validate_tx(
             return Ok(Json(json_response));
         }
     };
-    let temp_bridge_address = "0xCF6F0d155989B11Ba3882e99c72f609f0C06e086".to_owned();
+    let base_fee = match get_base_fee(&data.db, validated_origin_network.id).await {
+        Ok(block) => {
+            println!("{:#?}", &block);
+            match block.base_fee_per_gas {
+                Some(base_gas_fee) => base_gas_fee,
+                None => U256::from(0),
+            }
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("{}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    const TEMP_BRIDGE_ADDRESS: &str = "0xCF6F0d155989B11Ba3882e99c72f609f0C06e086";
     let response_tx = ResponseTransaction {
         id: created_tx.id,
         sender_address: payload.sender_address.clone(),
-        receiver_address: temp_bridge_address,
-        transfer_amount: (temp_bridge_fee + U256::from(payload.transfer_amount)).to_string(),
+        receiver_address: TEMP_BRIDGE_ADDRESS.to_string(),
+        transfer_amount: (U256::from(temp_bridge_fee) + U256::from(transfer_value)).as_u64(),
         gas_limit: est_gas_price.to_string(),
-        max_priority_fee_per_gas: est_gas_price.to_string(),
-        max_fee_per_gas: (temp_bridge_fee + U256::from(payload.transfer_amount)).to_string(),
+        max_priority_fee_per_gas: 0,
+        max_fee_per_gas: base_fee.as_u64(),
     };
     let json_response = serde_json::json!({
         "status": "success",
