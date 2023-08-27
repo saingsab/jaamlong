@@ -96,10 +96,7 @@ impl Transaction {
         Ok(transaction_vec)
     }
 
-    pub async fn get_transaction(
-        pool: &Pool<Postgres>,
-        id: Uuid,
-    ) -> Result<Transaction, sqlx::Error> {
+    pub async fn get_transaction(pool: &Pool<Postgres>, id: Uuid) -> Result<Self, sqlx::Error> {
         let transaction = sqlx::query!(
             r#"
                 SELECT 
@@ -126,7 +123,7 @@ impl Transaction {
         .fetch_one(pool)
         .await?;
 
-        let transaction_response = Transaction {
+        let transaction_response = Self {
             id: transaction.id,
             sender_address: transaction.sender_address.clone(),
             receiver_address: transaction.receiver_address.clone(),
@@ -153,11 +150,7 @@ impl Transaction {
         Ok(transaction_response)
     }
 
-    pub async fn create(
-        pool: &Pool<Postgres>,
-        tx: RequestInsertTx,
-    ) -> Result<Transaction, sqlx::Error> {
-        // let mut pool = pool.acquire().await?;
+    pub async fn create(pool: &Pool<Postgres>, tx: RequestInsertTx) -> Result<Self, sqlx::Error> {
         let id: Uuid = sqlx::query!(
             "INSERT INTO tbl_transactions (sender_address, receiver_address, from_token_address, to_token_address, origin_network, destin_network, asset_type, transfer_amount, bridge_fee, tx_status, origin_tx_hash, destin_tx_hash, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id",
             tx.sender_address,
