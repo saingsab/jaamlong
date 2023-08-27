@@ -1,3 +1,4 @@
+use crate::models::token_address::TokenAddress;
 use crate::models::{network::Network, transaction::Transaction};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
@@ -6,11 +7,13 @@ use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 use uuid::Uuid;
-use web3::types::CallRequest;
+use web3::api::{Eth, Namespace};
+use web3::contract::Options;
+use web3::transports::Http;
 use web3::types::{
-    Address, BlockId, TransactionParameters, TransactionReceipt, H160, H256, U256, U64,
+    Address, Block, BlockId, BlockNumber, CallRequest, TransactionParameters, TransactionReceipt,
+    H160, H256, U256, U64,
 };
-// static MINIMUN_BLOCK_CONFIRMATION: U64 = U64::from(2);
 #[derive(Deserialize, Serialize)]
 pub struct TransactionRequest {
     nonce: Option<U256>,
@@ -79,6 +82,20 @@ pub async fn get_current_nonce(
     Ok(nonce)
 }
 
+pub async fn get_base_fee(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+) -> Result<Block<web3::types::Transaction>, Error> {
+    let network_rpc = Network::get_network_by_id(pool, id).await?;
+    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let eth = Eth::new(transport.clone());
+    let latest_block = eth
+        .block_with_txs(BlockId::Number(BlockNumber::Latest))
+        .await?;
+    println!("Latest block: {:#?}", latest_block.clone().unwrap());
+    Ok(latest_block.unwrap())
+}
+
 pub async fn get_chain_id(pool: &Pool<Postgres>, id: Uuid) -> Result<U256, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
     let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
@@ -129,7 +146,7 @@ pub async fn validate_confirmed_block(
     }
 }
 
-pub async fn get_token_supply(
+async fn get_token_supply(
     _pool: &Pool<Postgres>,
     _id: Uuid,
     _asset_type: Uuid,
@@ -137,6 +154,60 @@ pub async fn get_token_supply(
     // [1]. If the asset type is the native asset type, then call balance() to check balance inside bridge wallet
     // [2]. If the asset type is the ERC20 asset type, then call total_balance() from smart contract to check balance inside the bridge wallet
     Ok(U256::from(1000))
+}
+
+async fn contract(
+    transport: Http,
+    address: Address,
+    abi_path: &str,
+) -> Result<web3::contract::Contract<Http>, Error> {
+    let eth = Eth::new(transport);
+    let abi = get_abi(abi_path).await?;
+    let contract = web3::contract::Contract::from_json(eth, address, &abi).unwrap();
+    Ok(contract)
+}
+
+async fn get_abi(path: &str) -> Result<Vec<u8>, Error> {
+    let file_path = path;
+    let mut file = File::open(file_path)?;
+    // Read the content of the file into a string
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    // Convert the JSON string into a byte slice (Vec<u8>)
+    let json_bytes = content.as_bytes().to_vec();
+    Ok(json_bytes)
+}
+
+pub async fn token_converter(
+    pool: &Pool<Postgres>,
+    network_id: Uuid,
+    token_id: Uuid,
+    amount: f64,
+) -> Result<u64, Error> {
+    let network = Network::get_network_by_id(pool, network_id).await?;
+    let token = TokenAddress::get_token_address_by_id(pool, token_id).await?;
+    let transport = web3::transports::Http::new(&network.network_rpc).unwrap();
+    let path = "src/HSM/NP_ERC20.json";
+    let token_address = match Address::from_str(token.token_address.as_str()) {
+        Ok(address) => address,
+        Err(err) => {
+            return Err(err.into());
+        }
+    };
+    let contract = contract(transport, token_address, path).await?;
+    let decimal: u16 = contract
+        .query(
+            "decimals",
+            (),
+            token_address,
+            Options::default(),
+            BlockId::Number(BlockNumber::Latest),
+        )
+        .await?;
+    let decimal_factor = (10u128).pow(decimal.into());
+    let value = amount * (decimal_factor as f64);
+    println!("Value: {}", value);
+    Ok(value as u64)
 }
 
 pub async fn broadcast_tx(
