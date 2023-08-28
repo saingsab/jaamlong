@@ -1,5 +1,4 @@
-use crate::models::token_address::TokenAddress;
-use crate::models::{network::Network, transaction::Transaction};
+use crate::models::{network::Network, token_address::TokenAddress, transaction::Transaction};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres};
@@ -181,33 +180,59 @@ async fn get_abi(path: &str) -> Result<Vec<u8>, Error> {
 pub async fn token_converter(
     pool: &Pool<Postgres>,
     network_id: Uuid,
+    asset_type: Uuid,
     token_id: Uuid,
     amount: f64,
 ) -> Result<u64, Error> {
     let network = Network::get_network_by_id(pool, network_id).await?;
-    let token = TokenAddress::get_token_address_by_id(pool, token_id).await?;
     let transport = web3::transports::Http::new(&network.network_rpc).unwrap();
-    let path = "src/HSM/NP_ERC20.json";
-    let token_address = match Address::from_str(token.token_address.as_str()) {
-        Ok(address) => address,
-        Err(err) => {
-            return Err(err.into());
-        }
-    };
-    let contract = contract(transport, token_address, path).await?;
-    let decimal: u16 = contract
-        .query(
-            "decimals",
-            (),
-            token_address,
-            Options::default(),
-            BlockId::Number(BlockNumber::Latest),
-        )
-        .await?;
-    let decimal_factor = (10u128).pow(decimal.into());
-    let value = amount * (decimal_factor as f64);
-    println!("Value: {}", value);
-    Ok(value as u64)
+    if asset_type == Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()) {
+        let web3 = web3::Web3::new(&transport);
+        let chain_id = web3.eth().chain_id().await?;
+        let native_token_decimal = match chain_id.as_u64() {
+            1 => 18,     // Ethereum Mainnet
+            3 => 18,     // Ropsten Testnet
+            4 => 18,     // Rinkeby Testnet
+            5 => 18,     // Goerli Testnet
+            43113 => 18, //Fuji Testnet
+            80001 => 18, //Mumbai Testnet
+            97 => 18,    //BNB Smart Chain Testnet
+            _ => {
+                println!(
+                    "Chain ID {} not recognized, using default decimals",
+                    chain_id
+                );
+                18 // Default to 18 decimals for unknown networks
+            }
+        };
+        let decimal_factor = (10u128).pow(native_token_decimal);
+        let value = amount * (decimal_factor as f64);
+        Ok(value as u64)
+    } else if asset_type == Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()) {
+        let token = TokenAddress::get_token_address_by_id(pool, token_id).await?;
+        let token_address = match Address::from_str(token.token_address.as_str()) {
+            Ok(address) => address,
+            Err(err) => {
+                return Err(err.into());
+            }
+        };
+        let path = "src/HSM/NP_ERC20.json";
+        let contract = contract(transport, token_address, path).await?;
+        let decimal: u16 = contract
+            .query(
+                "decimals",
+                (),
+                token_address,
+                Options::default(),
+                BlockId::Number(BlockNumber::Latest),
+            )
+            .await?;
+        let decimal_factor = (10u128).pow(decimal.into());
+        let value = amount * (decimal_factor as f64);
+        Ok(value as u64)
+    } else {
+        return Err(Error::msg("Invalid Token Asset Type"));
+    }
 }
 
 pub async fn broadcast_tx(
