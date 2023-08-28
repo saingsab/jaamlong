@@ -247,10 +247,24 @@ pub async fn validate_tx(
             return Ok(Json(json_response));
         }
     };
+    // println!("UUid NativeToken: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()));
+    // println!("UUid ERC20Token: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()));
+    // validate asset type
+    if payload.asset_type != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
+        && payload.asset_type != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()))
+    {
+        let error_message = "Asset type not supported";
+        let json_response = serde_json::json!({
+            "status": "fail",
+            "data": error_message
+        });
+        return Ok(Json(json_response));
+    }
     // perform token conversion
     let transfer_value = match token_converter(
         &data.db,
         validated_origin_network.id,
+        payload.asset_type.unwrap(),
         validated_from_token.id,
         payload.transfer_amount,
     )
@@ -291,13 +305,12 @@ pub async fn validate_tx(
                 return Ok(Json(json_response));
             }
         };
-    // println!("UUid NativeToken: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()));
-    // println!("UUid ERC20Token: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()));
     // Calculation of the bridge fee as needed
     const TEMP_FEE: f64 = 0.001;
     let temp_bridge_fee = match token_converter(
         &data.db,
         validated_origin_network.id,
+        payload.asset_type.unwrap(),
         validated_from_token.id,
         TEMP_FEE,
     )
