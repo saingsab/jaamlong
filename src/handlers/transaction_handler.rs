@@ -161,10 +161,16 @@ pub async fn validate_tx(
         return Ok(generate_error_response("Asset Type"));
     } else if payload.created_by.is_none() {
         return Ok(generate_error_response("Creator"));
-    } else if payload.transfer_amount <= 0.00 {
+    } else if payload.transfer_amount <= 0.00 { //validate transfer amount greater than 0.00
         let json_response = serde_json::json!({
             "status": "Request Body Failed",
             "data": "Amount must greater than zero",
+        });
+        return Ok(Json(json_response));
+    } else if payload.origin_network == payload.destin_network {
+        let json_response = serde_json::json!({
+            "status": "Fail",
+            "data": "Same networks are not allowed",
         });
         return Ok(Json(json_response));
     }
