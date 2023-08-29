@@ -13,6 +13,8 @@ CREATE TABLE
         transfer_amount BIGINT,
         bridge_fee BIGINT,
         tx_status UUID,
+        origin_tx_hash VARCHAR(100),
+        destin_tx_hash VARCHAR(100),
         created_by UUID,
         created_at TIMESTAMP
         WITH
