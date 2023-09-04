@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
+use sqlx::types::Json;
 use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
@@ -33,6 +35,18 @@ impl TokenAddress {
         .fetch_one(pool)
         .await?;
         Ok(network)
+    }
+
+    pub async fn get_token_abi_by_id(
+        pool: &Pool<Postgres>,
+        id: Uuid,
+    ) -> Result<Json<Value>, sqlx::Error> {
+        let abi: Value =
+            sqlx::query_scalar!(r#"SELECT abi FROM tbl_token_address WHERE id = $1"#, id)
+                .fetch_one(pool)
+                .await?
+                .into();
+        Ok(sqlx::types::Json(abi))
     }
 
     pub async fn get_all_token_address(
