@@ -144,7 +144,7 @@ pub async fn get_tx_receipt(
     let tx_receipt = web3.eth().transaction_receipt(hash_as_h256).await?;
     match &tx_receipt {
         Some(tx) => Ok(tx.clone()),
-        None => Err(Error::msg("Transaction Hash Invalid")),
+        None => Err(Error::msg("Transaction Receipt Not Found")),
     }
 }
 
@@ -153,7 +153,6 @@ pub async fn get_tx(
     network_id: Uuid,
     hash: String,
 ) -> Result<web3::types::Transaction, Error> {
-    println!("Hash: {:?}", hash);
     let network_rpc = Network::get_network_by_id(pool, network_id).await?;
     let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
     let web3 = web3::Web3::new(transport);
@@ -163,7 +162,7 @@ pub async fn get_tx(
     let tx = web3.eth().transaction(transaction_id).await?;
     match &tx {
         Some(tx) => Ok(tx.clone()),
-        None => Err(Error::msg("Transaction Hash Invalid")),
+        None => Err(Error::msg("Transaction Not Found")),
     }
 }
 
@@ -340,7 +339,7 @@ pub async fn send_erc20_token(
     let transfer_to_value = token_converter(
         pool,
         network_id,
-        transaction.asset_type.unwrap(),
+        transaction.to_asset_type.unwrap(),
         Uuid::from_str(transaction.to_token_address.as_str()).unwrap(),
         transaction.transfer_amount as f64,
     )
@@ -349,16 +348,13 @@ pub async fn send_erc20_token(
     let bridge_fee_to_value = token_converter(
         pool,
         network_id,
-        transaction.asset_type.unwrap(),
+        transaction.to_asset_type.unwrap(),
         Uuid::from_str(transaction.to_token_address.as_str()).unwrap(),
         transaction.bridge_fee as f64,
     )
     .await
     .expect("Error converting transfer amount to value");
     let transfer_amount = U256::from(transfer_to_value) - (U256::from(bridge_fee_to_value));
-    println!("Calcualted Transfer amount: {}", transfer_amount);
-    println!("Original transfer amount: {}", transaction.transfer_amount);
-    println!("Bridge fee: {}", transaction.bridge_fee);
     let send_transaction = match contract
         .signed_call_with_confirmations(
             "transfer",
