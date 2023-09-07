@@ -4,6 +4,8 @@ CREATE TABLE
         id UUID PRIMARY KEY NOT NULL DEFAULT (uuid_generate_v4()),
         network_name VARCHAR(16) NOT NULL,
         network_rpc VARCHAR(100) NOT NULL,
+        chain_id INTEGER NOT NULL,
+        decimal_value INTEGER NOT NULL,
         created_by UUID,
         created_at TIMESTAMP
         WITH

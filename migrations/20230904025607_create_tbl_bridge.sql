@@ -1,10 +1,9 @@
 -- Add migration script here
 CREATE TABLE
-    IF NOT EXISTS tbl_token_address (
+    IF NOT EXISTS tbl_bridge (
         id UUID PRIMARY KEY NOT NULL DEFAULT (uuid_generate_v4()),
-        token_address VARCHAR(64) NOT NULL,
-        token_symbol VARCHAR(10) NOT NULL,
-        abi JSONB,
+        bridge_address VARCHAR(64) NOT NULL,
+        bridge_fee FLOAT8 NOT NULL,
         created_by UUID,
         created_at TIMESTAMP
         WITH
