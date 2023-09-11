@@ -11,7 +11,7 @@ use crate::{
     utils::transaction_module::{
         get_base_fee, get_confirmed_block, get_est_gas_price, get_gas_price, get_token_supply,
         get_tx, get_tx_receipt, send_erc20_token, send_raw_transaction, token_converter,
-        validate_account,
+        validate_account_balance,
     },
 };
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
@@ -114,7 +114,7 @@ pub async fn broadcast_tx(
     //get bridge info
     let bridge = Bridge::get_bridge_info(
         &data.db,
-        Uuid::from_str("83d6b0aa-7d90-42de-b09f-f893cb2ee344").unwrap(),
+        Uuid::from_str("6ee66f4d-4923-49a5-a774-23c6e1701784").unwrap(),
     )
     .await
     .expect("Failed to get bridge information");
@@ -740,7 +740,7 @@ pub async fn broadcast_tx(
     }
 }
 
-pub async fn validate_tx(
+pub async fn request_tx(
     State(data): State<Arc<AppState>>,
     Json(payload): Json<RequestedTransaction>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -776,22 +776,6 @@ pub async fn validate_tx(
         });
         return Ok(Json(json_response));
     }
-    // validate sender account
-    validate_account(
-        &data.db,
-        (payload.origin_network).unwrap(),
-        Address::from_str((payload.sender_address).as_str()).unwrap(),
-    )
-    .await
-    .unwrap_or_default();
-    // validate receiver address
-    validate_account(
-        &data.db,
-        (payload.destin_network).unwrap(),
-        Address::from_str((payload.receiver_address).as_str()).unwrap(),
-    )
-    .await
-    .unwrap_or_default();
     //validate origin network
     let validated_origin_network =
         match Network::get_network_by_id(&data.db, payload.origin_network.unwrap()).await {
@@ -855,8 +839,8 @@ pub async fn validate_tx(
             return Ok(Json(json_response));
         }
     };
-    // println!("UUid NativeToken: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()));
-    // println!("UUid ERC20Token: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()));
+    println!("UUid NativeToken: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()));
+    println!("UUid ERC20Token: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()));
     // validate asset type
     if payload.from_asset_type != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
         && payload.to_asset_type
@@ -921,7 +905,7 @@ pub async fn validate_tx(
     // Calculation of the bridge fee as needed
     let bridge = Bridge::get_bridge_info(
         &data.db,
-        Uuid::from_str("83d6b0aa-7d90-42de-b09f-f893cb2ee344").unwrap(),
+        Uuid::from_str("6ee66f4d-4923-49a5-a774-23c6e1701784").unwrap(),
     )
     .await
     .expect("ERROR: Failed to get bridge info");
@@ -944,7 +928,15 @@ pub async fn validate_tx(
             return Ok(Json(json_response));
         }
     };
-    println!("Bridge fee: {}", bridge_fee);
+    // validate sender account
+    validate_account_balance(
+        &data.db,
+        (payload.origin_network).unwrap(),
+        Address::from_str((payload.sender_address).as_str()).unwrap(),
+        bridge_fee,
+    )
+    .await
+    .expect("Sender Account Validation Failed!");
     let tx_status = RequestInsertTxStatus {
         status_name: String::from("Pending"),
         created_by: Some(Uuid::new_v5(
