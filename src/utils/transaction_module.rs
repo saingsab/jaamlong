@@ -49,17 +49,18 @@ pub async fn get_est_gas_price(
     Ok(gas_price)
 }
 
-pub async fn validate_account(
+pub async fn validate_account_balance(
     pool: &Pool<Postgres>,
     id: Uuid,
     address: Address,
+    network_fee: u128,
 ) -> Result<bool, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
     let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
     let web3 = web3::Web3::new(transport);
     let balance = web3.eth().balance(address, None).await?;
-    if balance.as_u128() as f32 > 0.00 {
-        println!("Address: {:#?} \nBalance: {}", &address, balance);
+    let fee = network_fee as f32;
+    if balance.as_u128() as f32 > fee {
         Ok(true)
     } else {
         Err(Error::msg("Account Invalid"))
