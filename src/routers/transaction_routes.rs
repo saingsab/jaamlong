@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 pub fn transaction_routes(app_state: Arc<AppState>) -> Router {
     Router::new()
-        // .route("/", get(get_all_tx))
-        .route("/request-tx", post(request_tx))
+        // .route("/", get(get_all_tx)) //add authentication, pagination
+        .route("/validate-tx", post(request_tx))
         .route("/broadcast-tx", post(broadcast_tx))
         // .route("/api/notes", get(note_list_handler))
         // .route(
