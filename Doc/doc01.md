@@ -76,6 +76,7 @@ If your API requires specific headers, set them in the "Headers" tab. Common hea
 
 4. In the request body, specify the fields, data types, and values as required. Include the token_address IDs and network IDs that you fetched in Step 2.
 
+Body Fields Type:
 ```json
 {
   "sender_address": {
@@ -121,7 +122,7 @@ If your API requires specific headers, set them in the "Headers" tab. Common hea
 }
 ```
 
-Request example:
+Request Body example:
 
 ```json
 {
