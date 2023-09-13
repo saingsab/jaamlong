@@ -48,3 +48,21 @@ pub async fn get_token_address_by_id(
     });
     Ok(Json(json_response))
 }
+
+pub async fn get_native_token_uuid() -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let native_token_uuid =  Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes());
+    let json_response = serde_json::json!({
+        "status": "success",
+        "data": native_token_uuid
+    });
+    Ok(Json(json_response))
+}
+
+pub async fn get_erc20_token_uuid() -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let erc20_token_uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes());
+    let json_response = serde_json::json!({
+        "status": "success",
+        "data": erc20_token_uuid
+    });
+    Ok(Json(json_response))
+}
