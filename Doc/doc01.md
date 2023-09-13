@@ -12,27 +12,27 @@ Launch Postman on your computer.
 
 ## Step 2: Fetch UUIDs and Network IDs
 
-Before creating the request body, you'll need to obtain the following UUIDs and network IDs from your API endpoints:
+Before creating the request body, you'll need to obtain the following Token IDs and network IDs from your API endpoints:
 
 ### Fetch `from_token_address` and `to_token_address` UUIDs
 
 1. Create a new request in Postman (you can name it "Fetch Token Address UUIDs").
 
-2. Choose the appropriate HTTP method (likely GET).
+2. Choose the GET method.
 
-3. Enter the URL for fetching token address UUIDs. For example: `http://127.0.0.1:8000/token_addresses`
+3. Enter the URL: `http://127.0.0.1:8000/token_addresses` for fetching token address IDs.
 
 4. Send the GET request.
 
-5. Inspect the response to find the IDs for `from_token_address` and `to_token_address`.
+5. Inspect the response to find your desirable IDs for `from_token_address` and `to_token_address`.
 
 ### Fetch `origin_network` and `destin_network` IDs
 
 1. Create a new request in Postman (you can name it "Fetch Network IDs").
 
-2. Choose the appropriate HTTP method (likely GET).
+2. Choose the appropriate GET method.
 
-3. Enter the URL for fetching network IDs. For example: `http://127.0.0.1:8000/all_networks`
+3. Enter the URL: `http://127.0.0.1:8000/all_networks` for fetching network IDs.
 
 4. Send the GET request.
 
@@ -42,13 +42,13 @@ Before creating the request body, you'll need to obtain the following UUIDs and 
 
 1. Create a new request in Postman (you can name it "Fetch Asset Type UUIDs").
 
-2. Choose the appropriate HTTP method (likely GET).
+2. Choose the GET method.
 
-3. Enter the URL for fetching asset type UUIDs. For example: `http://127.0.0.1:8000/token-uuid-erc20` and `http://127.0.0.1:8000/token-uuid-native`
+3. Enter the URL: `http://127.0.0.1:8000/token-uuid-erc20` and `http://127.0.0.1:8000/token-uuid-native` for fetching asset type UUIDs.
 
 4. Send the GET requests for both endpoints.
 
-5. Inspect the responses to find the UUIDs for `from_asset_type` and `to_asset_type`.
+5. Inspect the responses to find the IDs for `from_asset_type` and `to_asset_type`.
 
 ## Step 3: Create a New Request
 
@@ -60,7 +60,7 @@ Before creating the request body, you'll need to obtain the following UUIDs and 
 
 4. Choose the HTTP method as "POST."
 
-5. Enter the request URL in the URL field.
+5. Enter the request URL: `127.0.0.1:8000/request-tx` in the URL field.
 
 ## Step 4: Set Request Headers ( No Headers Required For Now!!)
 
