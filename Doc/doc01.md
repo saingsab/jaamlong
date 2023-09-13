@@ -1,6 +1,6 @@
-# Sending a POST Request in Postman with UUID and Network ID Retrieval
+# Sending a POST Request-Tx
 
-This guide will walk you through sending a POST request in Postman. Before sending the request, you'll need to fetch specific UUIDs and network IDs from different endpoints. Here's how to do it step by step:
+This guide will walk you through sending a POST request in Postman. Before sending the request, you'll need to fetch specific token IDs and network IDs from different endpoints. Here's how to do it step by step:
 
 ## Prerequisites
 
