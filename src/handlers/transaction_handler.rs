@@ -877,31 +877,6 @@ pub async fn request_tx(
             return Ok(Json(json_response));
         }
     };
-    let call_req = CallRequest {
-        from: Some(H160::from_str(payload.sender_address.clone().as_str()).unwrap()),
-        to: Some(H160::from_str(payload.receiver_address.clone().as_str()).unwrap()),
-        gas: None,
-        gas_price: Some(current_gas_price),
-        value: Some(U256::from(transfer_value)),
-        data: None,
-        transaction_type: None,
-        access_list: None,
-        max_fee_per_gas: None,
-        max_priority_fee_per_gas: None,
-    };
-    //estimated_gas_price and balance validation
-    let est_gas_price =
-        match get_est_gas_price(&data.db, (payload.origin_network).unwrap(), call_req).await {
-            Ok(gas_price) => gas_price,
-            Err(err) => {
-                let error_message = format!("Error retrieving est gas price: {}", err);
-                let json_response = serde_json::json!({
-                    "status": "fail",
-                    "data": error_message
-                });
-                return Ok(Json(json_response));
-            }
-        };
     // Calculation of the bridge fee as needed
     let bridge = Bridge::get_bridge_info(
         &data.db,
@@ -937,6 +912,32 @@ pub async fn request_tx(
     )
     .await
     .expect("Sender Account Validation Failed!");
+    //initiate call request to estimate gas price
+    let call_req = CallRequest {
+        from: Some(H160::from_str(payload.sender_address.clone().as_str()).unwrap()),
+        to: Some(H160::from_str(payload.receiver_address.clone().as_str()).unwrap()),
+        gas: None,
+        gas_price: Some(current_gas_price),
+        value: Some(U256::from(transfer_value) + U256::from(bridge_fee)),
+        data: None,
+        transaction_type: None,
+        access_list: None,
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
+    };
+    //estimated_gas_price and balance validation
+    let est_gas_price =
+        match get_est_gas_price(&data.db, (payload.origin_network).unwrap(), call_req).await {
+            Ok(gas_price) => gas_price,
+            Err(err) => {
+                let error_message = format!("Error retrieving est gas price: {}", err);
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": error_message
+                });
+                return Ok(Json(json_response));
+            }
+        };
     let tx_status = RequestInsertTxStatus {
         status_name: String::from("Pending"),
         created_by: Some(Uuid::new_v5(
