@@ -878,9 +878,10 @@ pub async fn request_tx(
         }
     };
     // Calculation of the bridge fee as needed
+    let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
     let bridge = Bridge::get_bridge_info(
         &data.db,
-        Uuid::from_str("6ee66f4d-4923-49a5-a774-23c6e1701784").unwrap(),
+        Uuid::from_str(bridge_key.as_str()).unwrap(),
     )
     .await
     .expect("ERROR: Failed to get bridge info");
