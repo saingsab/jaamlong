@@ -10,7 +10,7 @@ Before you start, make sure you have Postman installed on your system.
 
 Launch Postman on your computer.
 
-## Step 2: Fetch UUIDs and Network IDs
+## Step 2: Fetch Token IDs and Network IDs
 
 Before creating the request body, you'll need to obtain the following Token IDs and network IDs from your API endpoints:
 
