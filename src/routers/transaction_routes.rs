@@ -1,9 +1,6 @@
-use crate::handlers::transaction_handler::{broadcast_tx, get_all_tx, request_tx};
+use crate::handlers::transaction_handler::{broadcast_tx, request_tx};
 use crate::AppState;
-use axum::{
-    routing::post,
-    Router,
-};
+use axum::{routing::post, Router};
 use std::sync::Arc;
 
 pub fn transaction_routes(app_state: Arc<AppState>) -> Router {

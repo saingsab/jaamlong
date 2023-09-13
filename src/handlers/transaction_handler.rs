@@ -112,12 +112,10 @@ pub async fn broadcast_tx(
         }
     };
     //get bridge info
-    let bridge = Bridge::get_bridge_info(
-        &data.db,
-        Uuid::from_str("6ee66f4d-4923-49a5-a774-23c6e1701784").unwrap(),
-    )
-    .await
-    .expect("Failed to get bridge information");
+    let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
+    let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).unwrap())
+        .await
+        .expect("Failed to get bridge information");
     if transaction.from_asset_type
         == Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
     {
@@ -839,8 +837,6 @@ pub async fn request_tx(
             return Ok(Json(json_response));
         }
     };
-    println!("UUid NativeToken: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()));
-    println!("UUid ERC20Token: {:#?}", Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()));
     // validate asset type
     if payload.from_asset_type != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
         && payload.to_asset_type
@@ -879,12 +875,9 @@ pub async fn request_tx(
     };
     // Calculation of the bridge fee as needed
     let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
-    let bridge = Bridge::get_bridge_info(
-        &data.db,
-        Uuid::from_str(bridge_key.as_str()).unwrap(),
-    )
-    .await
-    .expect("ERROR: Failed to get bridge info");
+    let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).unwrap())
+        .await
+        .expect("ERROR: Failed to get bridge info");
     let bridge_fee = match token_converter(
         &data.db,
         validated_origin_network.id,
