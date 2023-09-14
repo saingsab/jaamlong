@@ -1,16 +1,17 @@
 -- Add migration script here
-INSERT INTO tbl_token_address (token_address, token_symbol, created_by)
+INSERT INTO tbl_token_address (token_address, token_symbol, asset_type, created_by)
 VALUES
-    ('0x0000000000000000000000000000000000000001', 'ETH', '4f4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
-    ('0x0000000000000000000000000000000000000002', 'BTC', '4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
-    ('0xbE406F0189A0B4cf3A05C286473D23791Dd44Cc6', 'AVAX', '4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
-    ('0xd33ed6fce557e3ee09711fd8079244da5490210a', 'MATIC', '4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
-    ('0x0000000000000000000000000000000000000003', 'USDT', '5be6dca8-4a3f-92c2-8be6-4e4ad4571ed0');
+    ('0x0000000000000000000000000000000000000001', 'ETH', '0', '4f4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
+    ('0x0000000000000000000000000000000000000002', 'BTC', '0','4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
+    ('0xbE406F0189A0B4cf3A05C286473D23791Dd44Cc6', 'AVAX', '0','4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
+    ('0xd33ed6fce557e3ee09711fd8079244da5490210a', 'MATIC', '0','4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
+    ('0x0000000000000000000000000000000000000003', 'USDT', '1','5be6dca8-4a3f-92c2-8be6-4e4ad4571ed0');
 
-INSERT INTO tbl_token_address (token_address, token_symbol, abi, created_by)
+INSERT INTO tbl_token_address (token_address, token_symbol, asset_type, abi, created_by)
 VALUES
     ('0xd4CdFeAEbD67a301CbAE6C9B5B0Dc55790d2FF8D',
     'Mumbai-NP',
+    '1',
     '[
         {
             "inputs": [],
@@ -391,9 +392,9 @@ VALUES
     ]'::jsonb,
     '4f4adca8-6c6b-4a3f-92c2-8be6d4571ed0');
 
-INSERT INTO tbl_token_address (token_address, token_symbol, abi, created_by)
+INSERT INTO tbl_token_address (token_address, token_symbol, asset_type, abi, created_by)
 VALUES
-    ('0xd4FFd68f1B10a4b020cCe246Ac8C1F16Cbd5F4e7', 'Fuji-NP', '[
+    ('0xd4FFd68f1B10a4b020cCe246Ac8C1F16Cbd5F4e7', 'Fuji-NP', '1', '[
 	{
 		"inputs": [],
 		"stateMutability": "nonpayable",
