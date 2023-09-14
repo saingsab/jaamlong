@@ -20,7 +20,7 @@ Before creating the request body, you'll need to obtain the following Token IDs 
 
 2. Choose the GET method.
 
-3. Enter the URL: `http://127.0.0.1:8000/token_addresses` for fetching token address IDs.
+3. Enter the URL: `http://127.0.0.1:8000/token-addresses` for fetching token address IDs.
 
 4. Send the GET request.
 
@@ -32,7 +32,7 @@ Before creating the request body, you'll need to obtain the following Token IDs 
 
 2. Choose the appropriate GET method.
 
-3. Enter the URL: `http://127.0.0.1:8000/all_networks` for fetching network IDs.
+3. Enter the URL: `http://127.0.0.1:8000/all-networks` for fetching network IDs.
 
 4. Send the GET request.
 
