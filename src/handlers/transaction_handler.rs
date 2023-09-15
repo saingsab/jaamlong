@@ -1,4 +1,3 @@
-use crate::utils::transaction_module::get_decimal;
 use crate::AppState;
 use crate::{
     models::{
@@ -9,9 +8,8 @@ use crate::{
         transaction_status::{RequestInsertTxStatus, TransactionStatus},
     },
     utils::transaction_module::{
-        get_base_fee, get_confirmed_block, get_est_gas_price, get_gas_price, get_token_supply,
-        get_tx, get_tx_receipt, send_erc20_token, send_raw_transaction, token_converter,
-        validate_account_balance,
+        get_base_fee, get_confirmed_block, get_est_gas_price, get_tx, get_tx_receipt,
+        send_erc20_token, send_raw_transaction, token_converter, validate_account_balance,
     },
 };
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
@@ -20,22 +18,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 use web3::ethabi::{decode, ParamType};
-use web3::types::{Address, BlockId, CallRequest, H160, U256, U64};
-
-#[derive(Deserialize, Serialize)]
-pub struct CreateTransaction {
-    sender_address: String,
-    receiver_address: String,
-    from_token_address: String,
-    to_token_address: String,
-    origin_network: Option<Uuid>,
-    destin_network: Option<Uuid>,
-    asset_type: Option<Uuid>,
-    transfer_amount: i64,
-    bridge_fee: i64,
-    tx_status: Option<Uuid>,
-    created_by: Option<Uuid>,
-}
+use web3::types::{Address, BlockId, CallRequest, U256, U64};
 
 #[derive(Deserialize)]
 pub struct RequestedTransaction {
@@ -45,8 +28,6 @@ pub struct RequestedTransaction {
     to_token_address: Uuid,
     origin_network: Option<Uuid>,
     destin_network: Option<Uuid>,
-    from_asset_type: Option<Uuid>,
-    to_asset_type: Option<Uuid>,
     transfer_amount: f64,
     created_by: Option<Uuid>,
 }
@@ -116,9 +97,39 @@ pub async fn broadcast_tx(
     let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).unwrap())
         .await
         .expect("Failed to get bridge information");
-    if transaction.from_asset_type
-        == Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
+    let to_token = match TokenAddress::get_token_address_by_id(
+        &data.db,
+        Uuid::from_str(transaction.to_token_address.as_str())
+            .expect("Failed to parse to_token_address"),
+    )
+    .await
     {
+        Ok(token) => token,
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    let from_token = match TokenAddress::get_token_address_by_id(
+        &data.db,
+        Uuid::from_str(transaction.from_token_address.as_str())
+            .expect("Fail to parse to_token_address"),
+    )
+    .await
+    {
+        Ok(token) => token,
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    if from_token.asset_type == "0" {
         // for native token type, get transaciton receipt from hash
         match get_tx(
             &data.db,
@@ -128,7 +139,6 @@ pub async fn broadcast_tx(
         .await
         {
             Ok(tx) => {
-                println!("Origin Tx Receipt: {:#?}", tx);
                 //validate from address
                 match Some(tx.from) {
                     Some(from_address) => {
@@ -175,15 +185,12 @@ pub async fn broadcast_tx(
                     }
                 }
                 // validate the value transfer
-                let decimals =
-                    Network::get_network_by_id(&data.db, transaction.origin_network.unwrap())
-                        .await
-                        .expect("Failed to get network")
-                        .decimal_value;
-                let tx_value_to_wei = tx.value * (10u64).pow(decimals.try_into().unwrap());
-                let transfer_value_to_wei = transaction.transfer_amount as u128
-                    * (10u128).pow(decimals.try_into().unwrap());
-                if tx_value_to_wei != U256::from(transfer_value_to_wei) {
+                let transfer_value_int = tx.value;
+                println!("Transfer value: {}", &transfer_value_int);
+                println!("Bridge fee: {}", &transaction.bridge_fee);
+                let actual_transfer_amount =
+                    transfer_value_int - U256::from(transaction.bridge_fee);
+                if actual_transfer_amount != U256::from(transaction.transfer_amount) {
                     let json_response = serde_json::json!({
                         "status": "fail",
                         "data": format!("Value does not match")
@@ -234,9 +241,7 @@ pub async fn broadcast_tx(
                 return Ok(Json(json_response));
             }
         };
-    } else if transaction.from_asset_type
-        == Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()))
-    {
+    } else if from_token.asset_type == "1" {
         // for erc20 asset type
         match get_tx_receipt(
             &data.db,
@@ -248,8 +253,7 @@ pub async fn broadcast_tx(
             Ok(tx) => {
                 let logs = tx.logs.into_iter();
                 let mut topics = Vec::new();
-                for log in logs.into_iter() {
-                    println!("Log: {:#?}", log);
+                if let Some(log) = logs.into_iter().next() {
                     for topic in log.topics.into_iter() {
                         topics.push(topic);
                     }
@@ -262,18 +266,12 @@ pub async fn broadcast_tx(
                     let decoded_data = decode(&[abi_type], byte_slice).expect("Decoding failed");
                     // Extract and display the decoded value
                     let value = &decoded_data[0];
+                    println!("Value from log: {:#?}", &value);
+                    let transfer_value_int = value.clone().into_uint().unwrap();
+                    let actual_transfer_amount =
+                        transfer_value_int - U256::from(transaction.bridge_fee);
                     // validate the value transfer
-                    let decimal = get_decimal(
-                        &data.db,
-                        transaction.origin_network.unwrap(),
-                        Uuid::from_str(transaction.from_token_address.as_str()).unwrap(),
-                    )
-                    .await
-                    .expect("Error getting decimal");
-                    let decimal_factor = (10u128).pow(decimal.into());
-                    let value_int = value.clone().into_uint().unwrap();
-                    let division = value_int.div_mod(U256::from(decimal_factor));
-                    if division.0 != U256::from(transaction.transfer_amount) {
+                    if actual_transfer_amount != U256::from(transaction.transfer_amount) {
                         let json_response = serde_json::json!({
                             "status": "fail",
                             "data": format!("Value does not match")
@@ -342,7 +340,7 @@ pub async fn broadcast_tx(
             Err(err) => {
                 let json_response = serde_json::json!({
                     "status": "fail",
-                    "data": format!("Err: {}", err)
+                    "data": format!("Err Transaction Receipt: {}", err)
                 });
                 return Ok(Json(json_response));
             }
@@ -360,6 +358,7 @@ pub async fn broadcast_tx(
                 return Ok(Json(json_response));
             }
         };
+    println!("Destination network: {:#?}", &network);
     // validate transaction status from db
     match TransactionStatus::get_transaction_status(&data.db, transaction.tx_status.unwrap()).await
     {
@@ -398,45 +397,43 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     }
-    //validate token amount in the pool
-    match get_token_supply(&data.db, network.id, transaction.to_asset_type.unwrap()).await {
-        Ok(total_supply) => {
-            if total_supply.is_zero() {
-                let json_response = serde_json::json!({
-                    "status": "fail",
-                    "data": format!("Total Supply is zero")
-                });
-                return Ok(Json(json_response));
-            } else {
-                total_supply
-            }
-        }
-        Err(err) => {
-            let json_response = serde_json::json!({
-                "status": "fail",
-                "data": format!("Err: {}", err)
-            });
-            return Ok(Json(json_response));
-        }
-    };
+    // //validate token amount in the pool
+    // match get_token_supply(&data.db, network.id, transaction.to_asset_type.unwrap()).await {
+    //     Ok(total_supply) => {
+    //         if total_supply.is_zero() {
+    //             let json_response = serde_json::json!({
+    //                 "status": "fail",
+    //                 "data": format!("Total Supply is zero")
+    //             });
+    //             return Ok(Json(json_response));
+    //         } else {
+    //             total_supply
+    //         }
+    //     }
+    //     Err(err) => {
+    //         let json_response = serde_json::json!({
+    //             "status": "fail",
+    //             "data": format!("Err: {}", err)
+    //         });
+    //         return Ok(Json(json_response));
+    //     }
+    // };
     let p_k: String = dotenvy::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
-    if transaction.to_asset_type
-        == Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
-    {
+    if to_token.asset_type == "0" {
         match send_raw_transaction(&data.db, network.id, &transaction, p_k.as_str()).await {
             Ok(tx) => {
+                std::thread::sleep(std::time::Duration::from_secs(5));
                 // get transaciton receipt from hash
-                let new_tx_receipt =
-                    match get_tx(&data.db, payload.id, format!("{:?}", tx.to_string())).await {
-                        Ok(tx) => tx,
-                        Err(err) => {
-                            let json_response = serde_json::json!({
-                                "status": "fail",
-                                "data": format!("Err: {}", err)
-                            });
-                            return Ok(Json(json_response));
-                        }
-                    };
+                let new_tx_receipt = match get_tx(&data.db, network.id, format!("{:?}", tx)).await {
+                    Ok(tx) => tx,
+                    Err(err) => {
+                        let json_response = serde_json::json!({
+                            "status": "fail",
+                            "data": format!("Error getting transaction: {}", err)
+                        });
+                        return Ok(Json(json_response));
+                    }
+                };
                 //insert destination hash to db
                 match Transaction::update_tx_hash(
                     &data.db,
@@ -452,20 +449,26 @@ pub async fn broadcast_tx(
                     Err(err) => {
                         let json_response = serde_json::json!({
                             "status": "fail",
-                            "data": format!("Err: {}", err)
+                            "data": format!("Err updating tx: {}", err)
                         });
                         return Ok(Json(json_response));
                     }
                 }
+                println!("New Tx: {:#?}", &new_tx_receipt);
                 //check block confirmation
+                std::thread::sleep(std::time::Duration::from_secs(5));
                 match get_confirmed_block(
                     &data.db,
                     network.id,
-                    BlockId::Hash(new_tx_receipt.block_hash.unwrap()),
+                    BlockId::Hash(new_tx_receipt.block_hash.expect("Failed to get block hash")),
                 )
                 .await
                 {
                     Ok(num_block_confirmation) => {
+                        println!("Block confirmation #######: {}", num_block_confirmation);
+                        if num_block_confirmation.checked_sub(U64::from(2)).is_none() {
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                        }
                         //check if block_confirmation is greater than 2. Negative numbers return None
                         match &num_block_confirmation.checked_sub(U64::from(2)) {
                             Some(_block_num) => {
@@ -486,7 +489,7 @@ pub async fn broadcast_tx(
                         match get_tx_receipt(
                             &data.db,
                             transaction.destin_network.unwrap(),
-                            format!("{:?}", tx.to_string()),
+                            format!("{:?}", tx),
                         )
                         .await
                         {
@@ -502,15 +505,19 @@ pub async fn broadcast_tx(
                                             )
                                             .await
                                             {
-                                                Ok(status) => {
-                                                    println!("Tx Status: {:#?}", status);
+                                                Ok(_status) => {
+                                                    let json_response = serde_json::json!({
+                                                        "status": "fail",
+                                                        "data": format!("Transaction Status: {}\nBroadcast Tx Hash: {:#?}", tx.status.unwrap(), tx.transaction_hash)
+                                                    });
+                                                    Ok(Json(json_response))
                                                 }
                                                 Err(err) => {
                                                     let json_response = serde_json::json!({
                                                         "status": "fail",
                                                         "data": format!("Err Updating Tx Status: {}", err)
                                                     });
-                                                    return Ok(Json(json_response));
+                                                    Ok(Json(json_response))
                                                 }
                                             }
                                         } else if status == U64::from(0) {
@@ -522,8 +529,12 @@ pub async fn broadcast_tx(
                                             )
                                             .await
                                             {
-                                                Ok(status) => {
-                                                    println!("Tx Status: {:#?}", status);
+                                                Ok(_status) => {
+                                                    let json_response = serde_json::json!({
+                                                        "status": "fail",
+                                                        "data": format!("Transaction Status: {}, Broadcast Tx Hash: {:#?}", tx.status.unwrap(), tx.transaction_hash)
+                                                    });
+                                                    return Ok(Json(json_response));
                                                 }
                                                 Err(err) => {
                                                     let json_response = serde_json::json!({
@@ -533,6 +544,12 @@ pub async fn broadcast_tx(
                                                     return Ok(Json(json_response));
                                                 }
                                             }
+                                        } else {
+                                            let json_response = serde_json::json!({
+                                                "status": "fail",
+                                                "data": format!("Status not found")
+                                            });
+                                            return Ok(Json(json_response));
                                         }
                                     }
                                     None => {
@@ -540,21 +557,18 @@ pub async fn broadcast_tx(
                                             "status": "fail",
                                             "data": format!("Status not found")
                                         });
-                                        return Ok(Json(json_response));
+                                        Ok(Json(json_response))
                                     }
                                 }
-                                println!("Tx status: {:#?}", tx.status.unwrap());
                             }
-                            Err(e) => {
-                                println!("Error: {}", e)
+                            Err(err) => {
+                                let json_response = serde_json::json!({
+                                    "status": "fail",
+                                    "data": format!("Err Updating Tx Status: {}", err)
+                                });
+                                Ok(Json(json_response))
                             }
                         }
-                        println!("Broadcast transaction: {:#?}", tx);
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": tx
-                        });
-                        Ok(Json(json_response))
                     }
                     Err(err) => {
                         let json_response = serde_json::json!({
@@ -573,9 +587,7 @@ pub async fn broadcast_tx(
                 Ok(Json(json_response))
             }
         }
-    } else if transaction.to_asset_type
-        == Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()))
-    {
+    } else if to_token.asset_type == "1" {
         match send_erc20_token(&data.db, network.id, &transaction, p_k.as_str()).await {
             Ok(tx) => {
                 let new_tx_receipt = match get_tx(&data.db, network.id, format!("{:?}", tx)).await {
@@ -634,13 +646,7 @@ pub async fn broadcast_tx(
                             }
                         }
                         println!("Block confirmation: {:#?}", num_block_confirmation);
-                        match get_tx_receipt(
-                            &data.db,
-                            transaction.destin_network.unwrap(),
-                            format!("{:?}", tx),
-                        )
-                        .await
-                        {
+                        match get_tx_receipt(&data.db, network.id, format!("{:?}", tx)).await {
                             Ok(tx) => {
                                 match tx.status {
                                     Some(status) => {
@@ -746,33 +752,22 @@ pub async fn request_tx(
     fn generate_error_response(field_name: &str) -> Json<serde_json::Value> {
         let json_response = serde_json::json!({
             "status": "Request Body Failed",
-            "data": format!("{} must be provided!", field_name)
+            "data": format!("Validation Failed: {}", field_name)
         });
         Json(json_response)
     }
-    if payload.origin_network.is_none() {
-        return Ok(generate_error_response("Origin Network"));
-    } else if payload.destin_network.is_none() {
-        return Ok(generate_error_response("Destinated Network"));
-    } else if payload.from_asset_type.is_none() {
-        return Ok(generate_error_response("From Asset Type"));
-    } else if payload.to_asset_type.is_none() {
-        return Ok(generate_error_response("To Asset Type"));
-    } else if payload.created_by.is_none() {
-        return Ok(generate_error_response("Creator"));
-    } else if payload.transfer_amount <= 0.00 {
-        //validate transfer amount greater than 0.00
-        let json_response = serde_json::json!({
-            "status": "Request Body Failed",
-            "data": "Amount must greater than zero",
+    if payload.origin_network.is_none()
+        || payload.destin_network.is_none()
+        || payload.created_by.is_none()
+        || payload.transfer_amount <= 0.00
+    {
+        return Ok(if payload.transfer_amount <= 0.00 {
+            generate_error_response("Amount must be greater than zero")
+        } else {
+            generate_error_response("One or more required fields are missing")
         });
-        return Ok(Json(json_response));
     } else if payload.origin_network == payload.destin_network {
-        let json_response = serde_json::json!({
-            "status": "Fail",
-            "data": "Same networks are not allowed",
-        });
-        return Ok(Json(json_response));
+        return Ok(generate_error_response("Same Network Not Allowed"));
     }
     //validate origin network
     let validated_origin_network =
@@ -825,26 +820,11 @@ pub async fn request_tx(
                 return Ok(Json(json_response));
             }
         };
-    //query gas_price
-    let current_gas_price = match get_gas_price(&data.db, (payload.origin_network).unwrap()).await {
-        Ok(gas_price) => gas_price,
-        Err(err) => {
-            let error_message = format!("Error Gas Price: {}", err);
-            let json_response = serde_json::json!({
-                "status": "fail",
-                "data": error_message
-            });
-            return Ok(Json(json_response));
-        }
-    };
     // validate asset type
-    if payload.from_asset_type != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
-        && payload.to_asset_type
-            != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes()))
-        && payload.from_asset_type
-            != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()))
-        && payload.to_asset_type
-            != Some(Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes()))
+    if validated_from_token.asset_type != "0"
+        && validated_from_token.asset_type != "1"
+        && validated_to_token.asset_type != "0"
+        && validated_to_token.asset_type != "1"
     {
         let error_message = "Asset type not supported";
         let json_response = serde_json::json!({
@@ -857,15 +837,15 @@ pub async fn request_tx(
     let transfer_value = match token_converter(
         &data.db,
         validated_origin_network.id,
-        payload.from_asset_type.unwrap(),
-        validated_from_token.id,
+        validated_from_token.asset_type.clone(),
+        Some(validated_from_token.id),
         payload.transfer_amount,
     )
     .await
     {
         Ok(value) => value,
         Err(err) => {
-            let error_message = format!("Error converting token value: {}", err);
+            let error_message = format!("Error converting bridge fee to token value: {}", err);
             let json_response = serde_json::json!({
                 "status": "fail",
                 "data": error_message
@@ -878,18 +858,19 @@ pub async fn request_tx(
     let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).unwrap())
         .await
         .expect("ERROR: Failed to get bridge info");
-    let bridge_fee = match token_converter(
+    let bridge_fee = bridge.bridge_fee * payload.transfer_amount;
+    let bridge_fee_value = match token_converter(
         &data.db,
         validated_origin_network.id,
-        payload.from_asset_type.unwrap(),
-        validated_from_token.id,
-        bridge.bridge_fee * payload.transfer_amount,
+        validated_from_token.asset_type,
+        Some(validated_from_token.id),
+        bridge_fee,
     )
     .await
     {
         Ok(value) => value,
         Err(err) => {
-            let error_message = format!("Error retrieving est gas price: {}", err);
+            let error_message = format!("Error converting bridge fee token value: {}", err);
             let json_response = serde_json::json!({
                 "status": "fail",
                 "data": error_message
@@ -902,26 +883,15 @@ pub async fn request_tx(
         &data.db,
         (payload.origin_network).unwrap(),
         Address::from_str((payload.sender_address).as_str()).unwrap(),
-        bridge_fee,
+        bridge_fee as u128,
     )
     .await
     .expect("Sender Account Validation Failed!");
     //initiate call request to estimate gas price
-    let call_req = CallRequest {
-        from: Some(H160::from_str(payload.sender_address.clone().as_str()).unwrap()),
-        to: Some(H160::from_str(payload.receiver_address.clone().as_str()).unwrap()),
-        gas: None,
-        gas_price: Some(current_gas_price),
-        value: Some(U256::from(transfer_value) + U256::from(bridge_fee)),
-        data: None,
-        transaction_type: None,
-        access_list: None,
-        max_fee_per_gas: None,
-        max_priority_fee_per_gas: None,
-    };
+    let call_request = CallRequest::builder().build();
     //estimated_gas_price and balance validation
     let est_gas_price =
-        match get_est_gas_price(&data.db, (payload.origin_network).unwrap(), call_req).await {
+        match get_est_gas_price(&data.db, (payload.origin_network).unwrap(), call_request).await {
             Ok(gas_price) => gas_price,
             Err(err) => {
                 let error_message = format!("Error retrieving est gas price: {}", err);
@@ -957,10 +927,8 @@ pub async fn request_tx(
         to_token_address: validated_to_token.id.to_string(),
         origin_network: Some(validated_origin_network.id),
         destin_network: Some(validated_destinated_network.id),
-        from_asset_type: payload.from_asset_type,
-        to_asset_type: payload.to_asset_type,
         transfer_amount: transfer_value as i64,
-        bridge_fee: bridge_fee as i64,
+        bridge_fee: bridge_fee_value as i64,
         tx_status: Some(transaction_status_id),
         origin_tx_hash: None,
         destin_tx_hash: None,
@@ -1000,7 +968,7 @@ pub async fn request_tx(
         id: created_tx.id,
         sender_address: payload.sender_address.clone(),
         receiver_address: bridge.bridge_address,
-        transfer_amount: (U256::from(bridge_fee) + U256::from(transfer_value)).as_u64(),
+        transfer_amount: (U256::from(bridge_fee_value) + U256::from(transfer_value)).as_u64(),
         gas_limit: est_gas_price.to_string(),
         max_priority_fee_per_gas: 0,
         max_fee_per_gas: base_fee.as_u64(),

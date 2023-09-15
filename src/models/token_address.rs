@@ -20,6 +20,7 @@ pub struct ResponseTokenAddress {
     pub id: Uuid,
     pub token_address: String,
     pub token_symbol: String,
+    pub asset_type: String,
 }
 
 impl TokenAddress {
@@ -29,7 +30,7 @@ impl TokenAddress {
     ) -> Result<ResponseTokenAddress, sqlx::Error> {
         let network = sqlx::query_as!(
             ResponseTokenAddress,
-            r#"SELECT id, token_address, token_symbol FROM tbl_token_address WHERE id = $1"#,
+            r#"SELECT id, token_address, token_symbol, asset_type FROM tbl_token_address WHERE id = $1"#,
             id
         )
         .fetch_one(pool)
@@ -55,7 +56,7 @@ impl TokenAddress {
         let all_networks = sqlx::query_as!(
             ResponseTokenAddress,
             r#"
-                SELECT id, token_address, token_symbol from tbl_token_address
+                SELECT id, token_address, token_symbol, asset_type from tbl_token_address
             "#
         )
         .fetch_all(pool)
