@@ -1,8 +1,6 @@
 -- Add migration script here
 INSERT INTO tbl_token_address (token_address, token_symbol, asset_type, created_by)
 VALUES
-    ('0x0000000000000000000000000000000000000001', 'ETH', '0', '4f4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
-    ('0x0000000000000000000000000000000000000002', 'BTC', '0','4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
     ('0xbE406F0189A0B4cf3A05C286473D23791Dd44Cc6', 'AVAX', '0','4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
     ('0xd33ed6fce557e3ee09711fd8079244da5490210a', 'MATIC', '0','4d4adca8-6c6b-4a3f-92c2-8be6d4571ed0'),
     ('0x0000000000000000000000000000000000000003', 'USDT', '1','5be6dca8-4a3f-92c2-8be6-4e4ad4571ed0');
