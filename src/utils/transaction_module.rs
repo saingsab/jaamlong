@@ -53,17 +53,25 @@ pub async fn validate_account_balance(
     pool: &Pool<Postgres>,
     id: Uuid,
     address: Address,
+    transfer_amount: u128,
     network_fee: u128,
 ) -> Result<bool, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
     let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
     let web3 = web3::Web3::new(transport);
     let balance = web3.eth().balance(address, None).await?;
-    let fee = network_fee as f32;
-    if balance.as_u128() as f32 > fee {
+    if &balance.as_u128() < &transfer_amount {
+        return Err(Error::msg("Account Balance is not sufficient"));
+    }
+    // let fee = network_fee as f32;
+    if balance.as_u128() > network_fee {
+        println!("Balance: {:#?}", balance);
+        println!("Fee: {}", network_fee);
         Ok(true)
     } else {
-        Err(Error::msg("Account Invalid"))
+        println!("Balance: {:#?}", balance);
+        println!("Fee: {:#?}", network_fee);
+        Err(Error::msg("Account Balance is not sufficient"))
     }
 }
 

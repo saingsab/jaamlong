@@ -9,6 +9,8 @@ pub struct Network {
     pub network_name: String,
     pub chain_id: i64,
     pub decimal: i64,
+    pub bridge_address: String,
+    pub bridge_fee: f64,
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -21,6 +23,8 @@ pub struct ResponseNetwork {
     pub network_rpc: String,
     pub chain_id: i64,
     pub decimal_value: i64,
+    pub bridge_address: String,
+    pub bridge_fee: f64,
 }
 
 impl Network {
@@ -30,7 +34,7 @@ impl Network {
     ) -> Result<ResponseNetwork, sqlx::Error> {
         let network = sqlx::query_as!(
             ResponseNetwork,
-            r#"SELECT id, network_name, network_rpc, chain_id, decimal_value FROM tbl_networks WHERE id = $1"#,
+            r#"SELECT id, network_name, network_rpc, chain_id, decimal_value, bridge_address, bridge_fee FROM tbl_networks WHERE id = $1"#,
             id
         )
         .fetch_one(pool)
@@ -44,7 +48,7 @@ impl Network {
         let all_networks = sqlx::query_as!(
             ResponseNetwork,
             r#"
-                SELECT id, network_name, network_rpc, chain_id, decimal_value from tbl_networks
+                SELECT id, network_name, network_rpc, chain_id, decimal_value, bridge_address, bridge_fee from tbl_networks
             "#
         )
         .fetch_all(pool)
