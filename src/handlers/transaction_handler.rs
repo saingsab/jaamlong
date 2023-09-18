@@ -8,8 +8,9 @@ use crate::{
         transaction_status::{RequestInsertTxStatus, TransactionStatus},
     },
     utils::transaction_module::{
-        get_base_fee, get_confirmed_block, get_est_gas_price, get_tx, get_tx_receipt,
-        send_erc20_token, send_raw_transaction, token_converter, validate_account_balance,
+        generate_error_response, get_base_fee, get_confirmed_block, get_est_gas_price, get_tx,
+        get_tx_receipt, send_erc20_token, send_raw_transaction, token_converter,
+        validate_account_balance,
     },
 };
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
@@ -32,15 +33,15 @@ pub struct RequestedTransaction {
     created_by: Option<Uuid>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ResponseTransaction {
     id: Uuid,
     sender_address: String,
     receiver_address: String,
-    transfer_amount: u64,
+    transfer_amount: String,
     gas_limit: String,
     max_priority_fee_per_gas: i64,
-    max_fee_per_gas: u64,
+    max_fee_per_gas: u128,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -749,26 +750,21 @@ pub async fn request_tx(
     State(data): State<Arc<AppState>>,
     Json(payload): Json<RequestedTransaction>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    //validate request body
-    fn generate_error_response(field_name: &str) -> Json<serde_json::Value> {
-        let json_response = serde_json::json!({
-            "status": "Request Body Failed",
-            "data": format!("Validation Failed: {}", field_name)
-        });
-        Json(json_response)
-    }
+    // //validate request body
     if payload.origin_network.is_none()
         || payload.destin_network.is_none()
         || payload.created_by.is_none()
         || payload.transfer_amount <= 0.00
     {
         return Ok(if payload.transfer_amount <= 0.00 {
-            generate_error_response("Amount must be greater than zero")
+            axum::Json(generate_error_response("Amount must be greater than zero").unwrap())
         } else {
-            generate_error_response("One or more required fields are missing")
+            axum::Json(generate_error_response("One or more required fields are missing").unwrap())
         });
     } else if payload.origin_network == payload.destin_network {
-        return Ok(generate_error_response("Same Network Not Allowed"));
+        return Ok(Json(
+            generate_error_response("Same Network Not Allowed").unwrap(),
+        ));
     }
     //validate origin network
     let validated_origin_network =
@@ -854,19 +850,13 @@ pub async fn request_tx(
             return Ok(Json(json_response));
         }
     };
-    // Calculation of the bridge fee as needed
-    // let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
-    // let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).expect("Bridge Key Not Found"))
-    //     .await
-    //     .expect("ERROR: Failed to get bridge info");
+    // Calculation of the bridge fee
     let base_bridge_fee = validated_destinated_network.bridge_fee;
-    println!("Base bridge fee: {}", base_bridge_fee);
-    println!("Amount Payload: {}", payload.transfer_amount);
     let bridge_fee = base_bridge_fee * payload.transfer_amount;
     let bridge_fee_value = match token_converter(
         &data.db,
         validated_origin_network.id,
-        validated_from_token.asset_type,
+        validated_from_token.asset_type.clone(),
         Some(validated_from_token.id),
         bridge_fee,
     )
@@ -882,23 +872,59 @@ pub async fn request_tx(
             return Ok(Json(json_response));
         }
     };
-    println!("Bridge fee: {}", bridge_fee_value);
-    
     // validate sender account
-    validate_account_balance(
-        &data.db,
-        (payload.origin_network).unwrap(),
-        Address::from_str((payload.sender_address).as_str()).unwrap(),
-        transfer_value,
-        bridge_fee_value,
-    )
-    .await
-    .expect("Sender Account Validation Failed!");
+    if validated_from_token.asset_type == "0" {
+        match validate_account_balance(
+            &data.db,
+            (payload.origin_network).unwrap(),
+            Address::from_str((payload.sender_address).as_str()).unwrap(),
+            transfer_value,
+            None,
+            bridge_fee_value,
+        )
+        .await
+        {
+            Ok(_) => {
+                println!("To Token Validation Passed");
+            }
+            Err(err) => {
+                let error_message = format!("Account Balance Insufficient: {}", err);
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": error_message
+                });
+                return Ok(Json(json_response));
+            }
+        }
+    } else if validated_from_token.asset_type == "1" {
+        match validate_account_balance(
+            &data.db,
+            (payload.origin_network).unwrap(),
+            Address::from_str((payload.sender_address).as_str()).unwrap(),
+            transfer_value,
+            Some(validated_from_token.id),
+            bridge_fee_value,
+        )
+        .await
+        {
+            Ok(_) => {
+                println!("From Token Validation Passed");
+            }
+            Err(err) => {
+                let error_message = format!("Account Balance Insufficient: {}", err);
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": error_message
+                });
+                return Ok(Json(json_response));
+            }
+        }
+    }
     //initiate call request to estimate gas price
     let call_request = CallRequest::builder().build();
     //estimated_gas_price and balance validation
     let est_gas_price =
-        match get_est_gas_price(&data.db, (payload.origin_network).unwrap(), call_request).await {
+        match get_est_gas_price(&data.db, validated_origin_network.id, call_request).await {
             Ok(gas_price) => gas_price,
             Err(err) => {
                 let error_message = format!("Error retrieving est gas price: {}", err);
@@ -943,10 +969,7 @@ pub async fn request_tx(
     };
     //insert unconfirmed tx to database
     let created_tx = match Transaction::create(&data.db, inserted_tx).await {
-        Ok(tx) => {
-            println!("{:#?}", tx);
-            tx
-        }
+        Ok(tx) => tx,
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
@@ -956,30 +979,38 @@ pub async fn request_tx(
         }
     };
     let base_fee = match get_base_fee(&data.db, validated_origin_network.id).await {
-        Ok(block) => {
-            println!("{:#?}", &block);
-            match block.base_fee_per_gas {
-                Some(base_gas_fee) => base_gas_fee,
-                None => U256::from(0),
-            }
-        }
+        Ok(block) => match block.base_fee_per_gas {
+            Some(base_gas_fee) => base_gas_fee,
+            None => U256::from(0),
+        },
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": format!("{}", err)
+                "data": format!("Fail to get based fee: {}", err)
             });
             return Ok(Json(json_response));
         }
     };
     let bridge_address = validated_destinated_network.bridge_address;
+    let total_transfer_amount =
+        match U256::from(bridge_fee_value).checked_add(U256::from(transfer_value)) {
+            Some(amount) => amount,
+            None => {
+                let json_response = serde_json::json!({
+                    "status": "success",
+                    "data": "Error calulating transfer amount"
+                });
+                return Ok(Json(json_response));
+            }
+        };
     let response_tx = ResponseTransaction {
         id: created_tx.id,
         sender_address: payload.sender_address.clone(),
         receiver_address: bridge_address,
-        transfer_amount: (U256::from(bridge_fee_value) + U256::from(transfer_value)).as_u64(),
+        transfer_amount: total_transfer_amount.to_string(),
         gas_limit: est_gas_price.to_string(),
         max_priority_fee_per_gas: 0,
-        max_fee_per_gas: base_fee.as_u64(),
+        max_fee_per_gas: base_fee.as_u128(),
     };
     let json_response = serde_json::json!({
         "status": "success",
