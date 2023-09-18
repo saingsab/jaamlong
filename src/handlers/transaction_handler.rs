@@ -93,6 +93,7 @@ pub async fn broadcast_tx(
         }
     };
     //get bridge info
+    // ============== change bridge key to store in network db
     let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
     let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).unwrap())
         .await
@@ -854,11 +855,14 @@ pub async fn request_tx(
         }
     };
     // Calculation of the bridge fee as needed
-    let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
-    let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).unwrap())
-        .await
-        .expect("ERROR: Failed to get bridge info");
-    let bridge_fee = bridge.bridge_fee * payload.transfer_amount;
+    // let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key must be provided");
+    // let bridge = Bridge::get_bridge_info(&data.db, Uuid::from_str(bridge_key.as_str()).expect("Bridge Key Not Found"))
+    //     .await
+    //     .expect("ERROR: Failed to get bridge info");
+    let base_bridge_fee = validated_destinated_network.bridge_fee;
+    println!("Base bridge fee: {}", base_bridge_fee);
+    println!("Amount Payload: {}", payload.transfer_amount);
+    let bridge_fee = base_bridge_fee * payload.transfer_amount;
     let bridge_fee_value = match token_converter(
         &data.db,
         validated_origin_network.id,
@@ -878,12 +882,15 @@ pub async fn request_tx(
             return Ok(Json(json_response));
         }
     };
+    println!("Bridge fee: {}", bridge_fee_value);
+    
     // validate sender account
     validate_account_balance(
         &data.db,
         (payload.origin_network).unwrap(),
         Address::from_str((payload.sender_address).as_str()).unwrap(),
-        bridge_fee as u128,
+        transfer_value,
+        bridge_fee_value,
     )
     .await
     .expect("Sender Account Validation Failed!");
@@ -964,10 +971,11 @@ pub async fn request_tx(
             return Ok(Json(json_response));
         }
     };
+    let bridge_address = validated_destinated_network.bridge_address;
     let response_tx = ResponseTransaction {
         id: created_tx.id,
         sender_address: payload.sender_address.clone(),
-        receiver_address: bridge.bridge_address,
+        receiver_address: bridge_address,
         transfer_amount: (U256::from(bridge_fee_value) + U256::from(transfer_value)).as_u64(),
         gas_limit: est_gas_price.to_string(),
         max_priority_fee_per_gas: 0,
