@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 use serde_json::Value;
 use sqlx::types::Json;
 use sqlx::{FromRow, Pool, Postgres};
@@ -15,7 +14,7 @@ pub struct TokenAddress {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct ResponseTokenAddress {
     pub id: Uuid,
     pub token_address: String,
@@ -28,14 +27,14 @@ impl TokenAddress {
         pool: &Pool<Postgres>,
         id: Uuid,
     ) -> Result<ResponseTokenAddress, sqlx::Error> {
-        let network = sqlx::query_as!(
+        let token = sqlx::query_as!(
             ResponseTokenAddress,
             r#"SELECT id, token_address, token_symbol, asset_type FROM tbl_token_address WHERE id = $1"#,
             id
         )
         .fetch_one(pool)
         .await?;
-        Ok(network)
+        Ok(token)
     }
 
     pub async fn get_token_abi_by_id(
@@ -53,7 +52,7 @@ impl TokenAddress {
     pub async fn get_all_token_address(
         pool: &Pool<Postgres>,
     ) -> Result<Vec<ResponseTokenAddress>, sqlx::Error> {
-        let all_networks = sqlx::query_as!(
+        let all_tokens = sqlx::query_as!(
             ResponseTokenAddress,
             r#"
                 SELECT id, token_address, token_symbol, asset_type from tbl_token_address
@@ -61,6 +60,6 @@ impl TokenAddress {
         )
         .fetch_all(pool)
         .await?;
-        Ok(all_networks)
+        Ok(all_tokens)
     }
 }
