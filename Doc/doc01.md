@@ -32,7 +32,7 @@ Before creating the request body, you'll need to obtain the following Token IDs 
 
 2. Choose the appropriate GET method.
 
-3. Enter the URL: `http://127.0.0.1:8000/all-networks` for fetching network IDs.
+3. Enter the URL: `http://127.0.0.1:8000/networks` for fetching network IDs.
 
 4. Send the GET request.
 
@@ -40,15 +40,9 @@ Before creating the request body, you'll need to obtain the following Token IDs 
 
 ## Step 3: Create a New Request
 
-1. Click on the "New" button in the top left corner of the Postman window.
+1. Choose the HTTP method as "POST."
 
-2. Select "Request" to create a new request.
-
-3. Give your request a meaningful name.
-
-4. Choose the HTTP method as "POST."
-
-5. Enter the request URL: `http://127.0.0.1:8000/request-tx` in the URL field.
+2. Enter the request URL: `http://127.0.0.1:8000/request-tx` in the URL field.
 
 ## Step 4: Set Request Headers ( No Headers Required For Now!!)
 
