@@ -29,7 +29,7 @@ pub struct TransactionRequest {
 
 pub fn generate_error_response(field_name: &str) -> Result<Value, Error> {
     let json_response = serde_json::json!({
-        "status": "Request Body Failed",
+        "status": "failed",
         "data": format!("Validation Failed: {}", field_name)
     });
     Ok(json_response)
@@ -430,12 +430,21 @@ pub async fn send_raw_transaction(
             )))
         }
     };
+    let tx_value = match U256::from_str(transaction.transfer_amount.to_string().as_str()) {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(Error::msg(format!(
+                "Error parsing receiver address: {}",
+                err
+            )))
+        }
+    };
     let tx = TransactionParameters {
         nonce: Some(nonce),
         to: Some(receiver_address),
         gas: gas_price,
         gas_price: Some(gas),
-        value: U256::from(transaction.transfer_amount),
+        value: tx_value,
         ..Default::default()
     };
     // Sign the transaction
@@ -487,8 +496,8 @@ pub async fn send_erc20_token(
         Ok(k) => k,
         Err(err) => return Err(Error::msg(format!("Error parsing key: {}", err))),
     };
-    let transfer_amount =
-        U256::from(transaction.transfer_amount) - (U256::from(transaction.bridge_fee));
+    let transfer_amount = U256::from_str(transaction.transfer_amount.to_string().as_str()).unwrap()
+        - (U256::from_str(transaction.bridge_fee.to_string().as_str())).unwrap();
     let send_transaction = match contract
         .signed_call_with_confirmations(
             "transfer",
