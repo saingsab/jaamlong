@@ -1,6 +1,4 @@
-use crate::models::{
-    bridge::Bridge, network::Network, token_address::TokenAddress, transaction::Transaction,
-};
+use crate::models::{network::Network, token_address::TokenAddress, transaction::Transaction};
 use anyhow::Error;
 use secp256k1::SecretKey;
 use serde::{Deserialize, Serialize};
@@ -29,9 +27,20 @@ pub struct TransactionRequest {
     chain_id: U256,
 }
 
+pub fn generate_error_response(field_name: &str) -> Result<Value, Error> {
+    let json_response = serde_json::json!({
+        "status": "failed",
+        "data": format!("Validation Failed: {}", field_name)
+    });
+    Ok(json_response)
+}
+
 pub async fn get_gas_price(pool: &Pool<Postgres>, id: Uuid) -> Result<U256, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let gas_price = web3.eth().gas_price().await?;
     Ok(gas_price)
@@ -43,7 +52,10 @@ pub async fn get_est_gas_price(
     call_req: CallRequest,
 ) -> Result<U256, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let gas_price = web3.eth().estimate_gas(call_req, None).await?;
     Ok(gas_price)
@@ -54,30 +66,49 @@ pub async fn validate_account_balance(
     id: Uuid,
     address: Address,
     transfer_amount: u128,
+    token_id: Option<Uuid>,
     network_fee: u128,
 ) -> Result<bool, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
-    let balance = web3.eth().balance(address, None).await?;
-    if &balance.as_u128() < &transfer_amount {
+    let balance: u128;
+    if token_id.is_none() {
+        let origin_balance = match web3.eth().balance(address, None).await {
+            Ok(balance) => balance,
+            Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+        };
+        balance = origin_balance.as_u128();
+    } else {
+        let token_id = match token_id {
+            Some(t_i) => t_i,
+            None => return Err(Error::msg("Token ID Not Found or Invalid")),
+        };
+        let token_balance = match get_erc20_token(pool, id, token_id, address).await {
+            Ok(token) => token,
+            Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+        };
+        balance = token_balance;
+    }
+    if balance < transfer_amount {
         return Err(Error::msg("Account Balance is not sufficient"));
     }
-    // let fee = network_fee as f32;
-    if balance.as_u128() > network_fee {
-        println!("Balance: {:#?}", balance);
-        println!("Fee: {}", network_fee);
+    if balance > network_fee {
         Ok(true)
     } else {
-        println!("Balance: {:#?}", balance);
-        println!("Fee: {:#?}", network_fee);
         Err(Error::msg("Account Balance is not sufficient"))
     }
 }
 
 pub async fn get_current_block(pool: &Pool<Postgres>, network_id: Uuid) -> Result<U64, Error> {
     let network_rpc = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let current_block = web3.eth().block_number().await?;
     Ok(current_block)
@@ -89,7 +120,10 @@ pub async fn get_current_nonce(
     address: Address,
 ) -> Result<U256, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let nonce = web3.eth().transaction_count(address, None).await?;
     Ok(nonce)
@@ -100,18 +134,30 @@ pub async fn get_base_fee(
     id: Uuid,
 ) -> Result<Block<web3::types::Transaction>, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let eth = Eth::new(transport.clone());
-    let latest_block = eth
+    let latest_block = match eth
         .block_with_txs(BlockId::Number(BlockNumber::Latest))
-        .await?;
-    println!("Latest block: {:#?}", latest_block.clone().unwrap());
-    Ok(latest_block.unwrap())
+        .await
+    {
+        Ok(block) => block,
+        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+    };
+    match latest_block {
+        Some(block) => Ok(block),
+        None => Err(Error::msg("Latest Block Not Found".to_string())),
+    }
 }
 
 pub async fn get_chain_id(pool: &Pool<Postgres>, id: Uuid) -> Result<U256, Error> {
     let network_rpc = Network::get_network_by_id(pool, id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let chain_id = web3.eth().chain_id().await?;
     Ok(chain_id)
@@ -123,7 +169,10 @@ pub async fn get_confirmed_block(
     block_hash: BlockId,
 ) -> Result<U64, Error> {
     let network_rpc = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let current_block = get_current_block(pool, network_id).await?;
     println!("Current Block: {:#?}", current_block);
@@ -146,11 +195,17 @@ pub async fn get_tx_receipt(
     hash: String,
 ) -> Result<TransactionReceipt, Error> {
     let network_rpc = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let hash_trim = hash.trim_start_matches("0x");
-    let hash_as_h256 =
-        H256::from_slice(&hex::decode(hash_trim).expect("Failed to decode the hash"));
+    let decode_hash = match hex::decode(hash_trim) {
+        Ok(hash) => hash,
+        Err(err) => return Err(Error::msg(format!("Error Decode Hash: {}", err))),
+    };
+    let hash_as_h256 = H256::from_slice(&decode_hash);
     let tx_receipt = web3.eth().transaction_receipt(hash_as_h256).await?;
     match &tx_receipt {
         Some(tx) => Ok(tx.clone()),
@@ -164,11 +219,17 @@ pub async fn get_tx(
     hash: String,
 ) -> Result<web3::types::Transaction, Error> {
     let network_rpc = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
     let hash_trim = hash.trim_start_matches("0x");
-    let hash_as_h256 =
-        H256::from_slice(&hex::decode(hash_trim).expect("Failed to decode the hash"));
+    let decode_hash = match hex::decode(hash_trim) {
+        Ok(hash) => hash,
+        Err(err) => return Err(Error::msg(format!("Error Decode Hash: {}", err))),
+    };
+    let hash_as_h256 = H256::from_slice(&decode_hash);
     let transaction_id = TransactionId::Hash(hash_as_h256);
     let tx = web3.eth().transaction(transaction_id).await?;
     match &tx {
@@ -200,8 +261,10 @@ async fn contract(
         }
     };
     let json_bytes = abi.as_bytes().to_vec();
-    let contract = web3::contract::Contract::from_json(eth, address, &json_bytes).unwrap();
-    Ok(contract)
+    match web3::contract::Contract::from_json(eth, address, &json_bytes) {
+        Ok(contract) => Ok(contract),
+        Err(err) => Err(Error::msg(format!("Error Initialize Contract: {}", err))),
+    }
 }
 
 pub async fn token_converter(
@@ -211,43 +274,86 @@ pub async fn token_converter(
     token_id: Option<Uuid>,
     amount: f64,
 ) -> Result<u128, Error> {
-    let network = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network.network_rpc).unwrap();
+    let network_rpc = Network::get_network_by_id(pool, network_id).await?;
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     if asset_type == "0" {
         let native_decimal = Network::get_network_by_id(pool, network_id).await?;
         let decimal_factor = (10u128).pow(native_decimal.decimal_value as u32);
         let value = amount * (decimal_factor as f64);
         Ok(value as u128)
     } else if asset_type == "1" {
-        let token =
-            TokenAddress::get_token_address_by_id(pool, token_id.expect("Token ID Not Found"))
+        if let Some(token_id) = token_id {
+            let token = TokenAddress::get_token_address_by_id(pool, token_id).await?;
+            let token_address = match Address::from_str(token.token_address.as_str()) {
+                Ok(address) => address,
+                Err(err) => {
+                    return Err(err.into());
+                }
+            };
+            let abi = TokenAddress::get_token_abi_by_id(pool, token_id).await?;
+            let contract = contract(transport, token_address, abi).await?;
+            let decimal: u16 = contract
+                .query(
+                    "decimals",
+                    (),
+                    token_address,
+                    Options::default(),
+                    BlockId::Number(BlockNumber::Latest),
+                )
                 .await?;
-        let token_address = match Address::from_str(token.token_address.as_str()) {
-            Ok(address) => address,
-            Err(err) => {
-                return Err(err.into());
-            }
-        };
-        let abi =
-            TokenAddress::get_token_abi_by_id(pool, token_id.expect("Token ID Not Found")).await?;
-        let contract = contract(transport, token_address, abi).await?;
-        let decimal: u16 = contract
-            .query(
-                "decimals",
-                (),
-                token_address,
-                Options::default(),
-                BlockId::Number(BlockNumber::Latest),
-            )
-            .await?;
-        let decimal_factor = (10u128).pow(decimal.into());
-        println!("Decimal factor: {}", decimal_factor);
-        let value = amount * (decimal_factor as f64);
-        println!("Value: {}", value);
-        Ok(value as u128)
+            let decimal_factor = (10u128).pow(decimal.into());
+            let value = amount * (decimal_factor as f64);
+            Ok(value as u128)
+        } else {
+            return Err(Error::msg("Invalid Token ID"));
+        }
     } else {
         return Err(Error::msg("Invalid Token Asset Type"));
     }
+}
+
+pub async fn get_erc20_token(
+    pool: &Pool<Postgres>,
+    network_id: Uuid,
+    token_id: Uuid,
+    address: Address,
+) -> Result<u128, Error> {
+    let network_rpc = Network::get_network_by_id(pool, network_id).await?;
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
+    let token = TokenAddress::get_token_address_by_id(pool, token_id).await?;
+    let token_address = match Address::from_str(token.token_address.as_str()) {
+        Ok(address) => address,
+        Err(err) => {
+            return Err(Error::msg(format!(
+                "Fail converting token address: {}",
+                err
+            )));
+        }
+    };
+    let abi = TokenAddress::get_token_abi_by_id(pool, token_id).await?;
+    let contract = contract(transport, token_address, abi).await?;
+    let balance: u128 = match contract
+        .query(
+            "balanceOf",
+            Token::Address(address),
+            token_address,
+            Options::default(),
+            BlockId::Number(BlockNumber::Latest),
+        )
+        .await
+    {
+        Ok(balance) => balance,
+        Err(e) => {
+            return Err(Error::msg(format!("Query Address Balance Failed: {}", e)));
+        }
+    };
+    Ok(balance)
 }
 
 pub async fn get_decimal(
@@ -255,18 +361,24 @@ pub async fn get_decimal(
     network_id: Uuid,
     token_id: Uuid,
 ) -> Result<u16, Error> {
-    let network = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network.network_rpc).unwrap();
+    let network_rpc = Network::get_network_by_id(pool, network_id).await?;
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let token = TokenAddress::get_token_address_by_id(pool, token_id).await?;
     let token_address = match Address::from_str(token.token_address.as_str()) {
         Ok(address) => address,
         Err(err) => {
-            return Err(err.into());
+            return Err(Error::msg(format!(
+                "Fail converting token address: {}",
+                err
+            )));
         }
     };
     let abi = TokenAddress::get_token_abi_by_id(pool, token_id).await?;
     let contract = contract(transport, token_address, abi).await?;
-    let decimal: u16 = contract
+    let decimal: u16 = match contract
         .query(
             "decimals",
             (),
@@ -274,7 +386,13 @@ pub async fn get_decimal(
             Options::default(),
             BlockId::Number(BlockNumber::Latest),
         )
-        .await?;
+        .await
+    {
+        Ok(decimal) => decimal,
+        Err(err) => {
+            return Err(Error::msg(format!("Query Decimal Failed: {}", err)));
+        }
+    };
     Ok(decimal)
 }
 
@@ -285,32 +403,59 @@ pub async fn send_raw_transaction(
     p_k: &str,
 ) -> Result<H256, Error> {
     let network_rpc = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network_rpc.network_rpc).unwrap();
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
     let web3 = web3::Web3::new(transport);
-    let bridge_key = dotenvy::var("BRIDGE_KEY").expect("Bridge key is required");
-    let bridge = Bridge::get_bridge_info(pool, Uuid::from_str(bridge_key.as_str()).unwrap())
-        .await
-        .expect("ERROR: Failed to get bridge info");
-    let bridge_address = H160::from_str(&bridge.bridge_address.to_owned()).unwrap();
+    let bridge_address = match H160::from_str(network_rpc.bridge_address.as_str()) {
+        Ok(address) => address,
+        Err(err) => {
+            return Err(Error::msg(format!(
+                "Fail to get parse bridge address: {}",
+                err
+            )))
+        }
+    };
     let nonce = get_current_nonce(pool, network_id, bridge_address).await?;
     let gas = get_gas_price(pool, network_id).await?;
     let call_req = CallRequest::builder().build();
     let gas_price = get_est_gas_price(pool, network_id, call_req).await?;
-    println!("Gas: {:?}", &gas);
-    println!("Gas estimation: {:?}", &gas_price);
+    let receiver_address = match H160::from_str(transaction.receiver_address.as_str()) {
+        Ok(address) => address,
+        Err(err) => {
+            return Err(Error::msg(format!(
+                "Error parsing receiver address: {}",
+                err
+            )))
+        }
+    };
+    let tx_value = match U256::from_str(transaction.transfer_amount.to_string().as_str()) {
+        Ok(value) => value,
+        Err(err) => {
+            return Err(Error::msg(format!(
+                "Error parsing receiver address: {}",
+                err
+            )))
+        }
+    };
     let tx = TransactionParameters {
         nonce: Some(nonce),
-        to: Some(H160::from_str(transaction.receiver_address.as_str()).unwrap()),
+        to: Some(receiver_address),
         gas: gas_price,
         gas_price: Some(gas),
-        value: U256::from(transaction.transfer_amount),
+        value: tx_value,
         ..Default::default()
     };
     // Sign the transaction
-    let signed_tx = web3
+    let signed_tx = match web3
         .accounts()
-        .sign_transaction(tx, &p_k.parse().unwrap())
-        .await?;
+        .sign_transaction(tx, &p_k.parse().expect("Error parsing private key"))
+        .await
+    {
+        Ok(signed_tx) => signed_tx,
+        Err(err) => return Err(Error::msg(format!("Error signing transaction: {}", err))),
+    };
     // Send the transaction
     let tx_hash = web3
         .eth()
@@ -325,22 +470,34 @@ pub async fn send_erc20_token(
     transaction: &Transaction,
     p_k: &str,
 ) -> Result<H256, Error> {
-    let network = Network::get_network_by_id(pool, network_id).await?;
-    let transport = web3::transports::Http::new(&network.network_rpc).unwrap();
-    let to_token_address_id = Uuid::from_str(transaction.to_token_address.as_str()).unwrap();
+    let network_rpc = Network::get_network_by_id(pool, network_id).await?;
+    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
+    let to_token_address_id = match Uuid::from_str(transaction.to_token_address.as_str()) {
+        Ok(token_id) => token_id,
+        Err(err) => return Err(Error::msg(format!("Error getting token id: {}", err))),
+    };
     let token = TokenAddress::get_token_address_by_id(pool, to_token_address_id).await?;
     let token_address = match Address::from_str(token.token_address.as_str()) {
         Ok(address) => address,
         Err(err) => {
-            return Err(err.into());
+            return Err(Error::msg(format!("Error: {}", err)));
         }
     };
     let abi = TokenAddress::get_token_abi_by_id(pool, to_token_address_id).await?;
     let contract = contract(transport, token_address, abi).await?;
-    let receiver_address = Address::from_str(transaction.receiver_address.as_str()).unwrap();
-    let key = SecretKey::from_str(p_k).unwrap();
-    let transfer_amount =
-        U256::from(transaction.transfer_amount) - (U256::from(transaction.bridge_fee));
+    let receiver_address = match Address::from_str(transaction.receiver_address.as_str()) {
+        Ok(address) => address,
+        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+    };
+    let key = match SecretKey::from_str(p_k) {
+        Ok(k) => k,
+        Err(err) => return Err(Error::msg(format!("Error parsing key: {}", err))),
+    };
+    let transfer_amount = U256::from_str(transaction.transfer_amount.to_string().as_str()).unwrap()
+        - (U256::from_str(transaction.bridge_fee.to_string().as_str())).unwrap();
     let send_transaction = match contract
         .signed_call_with_confirmations(
             "transfer",

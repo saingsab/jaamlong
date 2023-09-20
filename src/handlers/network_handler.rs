@@ -1,50 +1,76 @@
-use crate::models::network::Network;
 use crate::AppState;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use serde::Serialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NetworkRequest {
+#[derive(Serialize)]
+struct NetworkIdResponse {
     id: Uuid,
+    network_name: String,
+}
+
+pub async fn get_network_by_id(
+    State(data): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let network = sqlx::query_as!(
+        NetworkIdResponse,
+        r#"
+            SELECT id, network_name from tbl_networks where id = $1
+        "#,
+        id
+    )
+    .fetch_one(&data.db)
+    .await;
+    match network {
+        Ok(network) => {
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": network
+            });
+            Ok(Json(json_response))
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("{}", err)
+            });
+            Ok(Json(json_response))
+        }
+    }
 }
 
 pub async fn get_all_networks(
     State(data): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let networks = Network::get_all_networks(&data.db).await;
-    if networks.is_err() {
-        let error_response = serde_json::json!({
-            "status": "fail",
-            "message": "Something bad happened while fetching all transactions",
-        });
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)));
+    let all_networks = sqlx::query_as!(
+        NetworkIdResponse,
+        r#"
+            SELECT id, network_name from tbl_networks
+        "#
+    )
+    .fetch_all(&data.db)
+    .await;
+    match all_networks {
+        Ok(networks) => {
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": networks
+            });
+            Ok(Json(json_response))
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("{}", err)
+            });
+            Ok(Json(json_response))
+        }
     }
-    let data = networks.unwrap();
-    let json_response = serde_json::json!({
-        "status": "success",
-        "data": data
-    });
-    Ok(Json(json_response))
-}
-
-pub async fn get_network_by_id(
-    State(data): State<Arc<AppState>>,
-    Json(payload): Json<NetworkRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let networks = Network::get_network_by_id(&data.db, payload.id).await;
-    if networks.is_err() {
-        let error_response = serde_json::json!({
-            "status": "fail",
-            "message": "Something bad happened while fetching all transactions",
-        });
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)));
-    }
-    let data = networks.unwrap();
-    let json_response = serde_json::json!({
-        "status": "success",
-        "data": data
-    });
-    Ok(Json(json_response))
 }

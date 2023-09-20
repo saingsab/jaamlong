@@ -1,9 +1,9 @@
+// use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgQueryResult, FromRow, Pool, Postgres};
+use sqlx::{postgres::PgQueryResult, types::BigDecimal, FromRow, Pool, Postgres};
 use uuid::Uuid;
 
-#[derive(Debug, FromRow, Deserialize, Serialize)]
+#[derive(Debug, FromRow)]
 pub struct Transaction {
     pub id: Uuid,
     pub sender_address: String,
@@ -12,8 +12,8 @@ pub struct Transaction {
     pub to_token_address: String,
     pub origin_network: Option<Uuid>,
     pub destin_network: Option<Uuid>,
-    pub transfer_amount: i64,
-    pub bridge_fee: i64,
+    pub transfer_amount: sqlx::types::BigDecimal,
+    pub bridge_fee: sqlx::types::BigDecimal,
     pub tx_status: Option<Uuid>,
     pub origin_tx_hash: Option<String>,
     pub destin_tx_hash: Option<String>,
@@ -22,6 +22,7 @@ pub struct Transaction {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug)]
 pub struct RequestInsertTx {
     pub sender_address: String,
     pub receiver_address: String,
@@ -29,8 +30,8 @@ pub struct RequestInsertTx {
     pub to_token_address: String,
     pub origin_network: Option<Uuid>,
     pub destin_network: Option<Uuid>,
-    pub transfer_amount: i64,
-    pub bridge_fee: i64,
+    pub transfer_amount: sqlx::types::BigDecimal,
+    pub bridge_fee: sqlx::types::BigDecimal,
     pub tx_status: Option<Uuid>,
     pub origin_tx_hash: Option<String>,
     pub destin_tx_hash: Option<String>,
@@ -64,6 +65,22 @@ impl Transaction {
         .await?;
         let mut transaction_vec: Vec<Transaction> = Vec::new();
         for transaction in &transactions {
+            let tx_amount_big_decimal: BigDecimal = match &transaction.transfer_amount {
+                Some(amount) => amount.clone(),
+                None => {
+                    return Err(sqlx::Error::ColumnNotFound(
+                        "Failed to get transaction amount".to_string(),
+                    ))
+                }
+            };
+            let tx_bridge_fee: BigDecimal = match &transaction.bridge_fee {
+                Some(amount) => amount.clone(),
+                None => {
+                    return Err(sqlx::Error::ColumnNotFound(
+                        "Failed to get fee amount".to_string(),
+                    ))
+                }
+            };
             let new_transaction = Transaction {
                 id: transaction.id,
                 sender_address: transaction.sender_address.clone(),
@@ -72,8 +89,8 @@ impl Transaction {
                 to_token_address: transaction.to_token_address.clone(),
                 origin_network: transaction.origin_network,
                 destin_network: transaction.destin_network,
-                transfer_amount: transaction.transfer_amount.unwrap_or(0),
-                bridge_fee: transaction.bridge_fee.unwrap_or(0),
+                transfer_amount: tx_amount_big_decimal,
+                bridge_fee: tx_bridge_fee,
                 tx_status: transaction.tx_status,
                 origin_tx_hash: transaction.origin_tx_hash.clone(),
                 destin_tx_hash: transaction.destin_tx_hash.clone(),
@@ -117,7 +134,22 @@ impl Transaction {
         )
         .fetch_one(pool)
         .await?;
-
+        let tx_amount_big_decimal: BigDecimal = match &transaction.transfer_amount {
+            Some(amount) => amount.clone(),
+            None => {
+                return Err(sqlx::Error::ColumnNotFound(
+                    "Failed to get transaction amount".to_string(),
+                ))
+            }
+        };
+        let tx_bridge_fee: BigDecimal = match &transaction.bridge_fee {
+            Some(amount) => amount.clone(),
+            None => {
+                return Err(sqlx::Error::ColumnNotFound(
+                    "Failed to get bridge fee".to_string(),
+                ))
+            }
+        };
         let transaction_response = Self {
             id: transaction.id,
             sender_address: transaction.sender_address.clone(),
@@ -126,8 +158,8 @@ impl Transaction {
             to_token_address: transaction.to_token_address.clone(),
             origin_network: transaction.origin_network,
             destin_network: transaction.destin_network,
-            transfer_amount: transaction.transfer_amount.unwrap_or(0),
-            bridge_fee: transaction.bridge_fee.unwrap_or(0),
+            transfer_amount: tx_amount_big_decimal,
+            bridge_fee: tx_bridge_fee,
             tx_status: transaction.tx_status,
             origin_tx_hash: transaction.origin_tx_hash.clone(),
             destin_tx_hash: transaction.destin_tx_hash.clone(),
@@ -141,6 +173,7 @@ impl Transaction {
                 None => Utc::now(),
             },
         };
+        println!("Transaction_Res: {:#?}", transaction_response);
         Ok(transaction_response)
     }
 

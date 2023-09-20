@@ -4,9 +4,7 @@ This guide will walk you through sending a POST request in Postman. Before sendi
 
 ## Prerequisites
 
-Before you start, make sure you have Postman installed on your system.
-Add necessary variable to .env file. DATABASE_URL and BRIDGE_KEY are needed to perform this request
-- BRIDGE_KEY is the bridge ID that is query from db
+Add necessary variable to .env file. DATABASE_URL is needed to perform this request
 
 ## Step 1: Open Postman
 
@@ -34,7 +32,7 @@ Before creating the request body, you'll need to obtain the following Token IDs 
 
 2. Choose the appropriate GET method.
 
-3. Enter the URL: `http://127.0.0.1:8000/all-networks` for fetching network IDs.
+3. Enter the URL: `http://127.0.0.1:8000/networks` for fetching network IDs.
 
 4. Send the GET request.
 
@@ -42,15 +40,9 @@ Before creating the request body, you'll need to obtain the following Token IDs 
 
 ## Step 3: Create a New Request
 
-1. Click on the "New" button in the top left corner of the Postman window.
+1. Choose the HTTP method as "POST."
 
-2. Select "Request" to create a new request.
-
-3. Give your request a meaningful name.
-
-4. Choose the HTTP method as "POST."
-
-5. Enter the request URL: `127.0.0.1:8000/request-tx` in the URL field.
+2. Enter the request URL: `http://127.0.0.1:8000/request-tx` in the URL field.
 
 ## Step 4: Set Request Headers ( No Headers Required For Now!!)
 
@@ -71,11 +63,11 @@ Body Fields Type:
 {
   "sender_address": {
     "type": "string",
-    "value": "0x5852231D8a00306A67DfB128AEd50c1573411d60"
+    "value": "sender_address_here"
   },
   "receiver_address": {
     "type": "string",
-    "value": "0x33b6Cc6169a2Acea65b89DDD886125e04BE49CF6"
+    "value": "receiver_address_here"
   },
   "from_token_address": {
     "type": "string",
@@ -95,7 +87,7 @@ Body Fields Type:
   },
   "transfer_amount": {
     "type": "float",
-    "value": 5
+    "example_value": 0.5
   },
   "created_by": {
     "type": "string",

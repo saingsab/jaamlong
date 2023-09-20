@@ -1,70 +1,75 @@
-use crate::models::token_address::TokenAddress;
 use crate::AppState;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use serde::Serialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TokenAddressRequest {
-    id: Uuid,
+#[derive(Debug, Serialize)]
+pub struct ResponseToken {
+    pub id: Uuid,
+    pub token_address: String,
+    pub token_symbol: String,
 }
 
 pub async fn get_all_token_addresses(
     State(data): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let networks = TokenAddress::get_all_token_address(&data.db).await;
-    if networks.is_err() {
-        let error_response = serde_json::json!({
-            "status": "fail",
-            "message": "Something bad happened while fetching all transactions",
-        });
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)));
+    let all_tokens = sqlx::query_as!(
+        ResponseToken,
+        r#"
+            SELECT id, token_address, token_symbol from tbl_token_address
+        "#
+    )
+    .fetch_all(&data.db)
+    .await;
+    match all_tokens {
+        Ok(tokens) => {
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": tokens
+            });
+            Ok(Json(json_response))
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Error: {}", err)
+            });
+            Ok(Json(json_response))
+        }
     }
-    let data = networks.unwrap();
-    let json_response = serde_json::json!({
-        "status": "success",
-        "data": data
-    });
-    Ok(Json(json_response))
 }
 
 pub async fn get_token_address_by_id(
     State(data): State<Arc<AppState>>,
-    Json(payload): Json<TokenAddressRequest>,
+    Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let networks = TokenAddress::get_token_address_by_id(&data.db, payload.id).await;
-    if networks.is_err() {
-        let error_response = serde_json::json!({
-            "status": "fail",
-            "message": "Something bad happened while fetching all transactions",
-        });
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)));
+    let token = sqlx::query_as!(
+        ResponseToken,
+        r#"SELECT id, token_address, token_symbol FROM tbl_token_address WHERE id = $1"#,
+        id
+    )
+    .fetch_one(&data.db)
+    .await;
+    match token {
+        Ok(token) => {
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": token
+            });
+            Ok(Json(json_response))
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Error: {}", err)
+            });
+            Ok(Json(json_response))
+        }
     }
-    let data = networks.unwrap();
-    let json_response = serde_json::json!({
-        "status": "success",
-        "data": data
-    });
-    Ok(Json(json_response))
-}
-
-pub async fn get_native_token_uuid(
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let native_token_uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, "NativeToken".as_bytes());
-    let json_response = serde_json::json!({
-        "status": "success",
-        "data": native_token_uuid
-    });
-    Ok(Json(json_response))
-}
-
-pub async fn get_erc20_token_uuid(
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let erc20_token_uuid = Uuid::new_v5(&Uuid::NAMESPACE_URL, "ERC20Token".as_bytes());
-    let json_response = serde_json::json!({
-        "status": "success",
-        "data": erc20_token_uuid
-    });
-    Ok(Json(json_response))
 }
