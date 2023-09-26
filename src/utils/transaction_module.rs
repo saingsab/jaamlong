@@ -454,7 +454,6 @@ pub async fn send_raw_transaction(
         Ok(gas_price) => gas_price,
         Err(err) => return Err(Error::msg(format!("Error getting gas price: {}", err))),
     };
-    println!("Here");
     let receiver_address = match H160::from_str(transaction.receiver_address.as_str()) {
         Ok(address) => address,
         Err(err) => {
@@ -559,6 +558,8 @@ pub async fn send_erc20_token(
             )))
         }
     };
+    // let sign_tx = match contract
+    //     .sign
     println!("Actual Transfer Amount: {}", actual_transfer_amount);
     let send_transaction = match contract
         .signed_call_with_confirmations(
