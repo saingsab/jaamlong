@@ -1,6 +1,5 @@
 use crate::models::{network::Network, token_address::TokenAddress, transaction::Transaction};
 use anyhow::Error;
-use secp256k1::SecretKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::types::Json;
@@ -12,19 +11,31 @@ use web3::contract::Options;
 use web3::ethabi::Token;
 use web3::transports::Http;
 use web3::types::{
-    Address, Block, BlockId, BlockNumber, CallRequest, TransactionId, TransactionParameters,
-    TransactionReceipt, H160, H256, U256, U64,
+    Address, Block, BlockId, BlockNumber, Bytes, CallRequest, TransactionId, TransactionReceipt,
+    H160, H256, U256, U64,
 };
+#[derive(Debug, Clone, Serialize)]
+struct TxRequest {
+    pub chain_id: String,
+    pub to: String,
+    pub nonce: String,
+    pub value: String,
+    pub gas: String,
+    pub gas_price: String,
+}
+#[derive(Debug, Serialize)]
+struct TxBroadcastRequest {
+    network_rpc: String,
+    bridge_address: String,
+    tx: TxRequest,
+    token_address: Option<String>,
+    abi: Option<Json<Value>>,
+}
 
-#[derive(Deserialize, Serialize)]
-pub struct TransactionRequest {
-    nonce: Option<U256>,
-    to: Address,
-    value: U256, // 1 Ether in wei
-    gas: Option<U256>,
-    gas_price: U256,
-    data: Option<U256>,
-    chain_id: U256,
+#[derive(Debug, Deserialize)]
+struct ResponseRaw {
+    status: String,
+    data: Bytes,
 }
 
 pub fn generate_error_response(field_name: &str) -> Result<Value, Error> {
@@ -269,7 +280,7 @@ pub async fn get_token_supply(
     Ok(U256::from(1000))
 }
 
-async fn contract(
+pub async fn contract(
     transport: Http,
     address: Address,
     abi_json: Json<Value>,
@@ -417,22 +428,36 @@ pub async fn get_decimal(
     Ok(decimal)
 }
 
-pub async fn send_raw_transaction(
-    pool: &Pool<Postgres>,
-    network_id: Uuid,
-    transaction: &Transaction,
-    p_k: &str,
-) -> Result<H256, Error> {
-    let network_rpc = match Network::get_network_by_id(pool, network_id).await {
+pub async fn send_erc20(pool: &Pool<Postgres>, transaction: &Transaction) -> Result<H256, Error> {
+    let destination_network = match transaction.destin_network {
+        Some(network) => network,
+        None => {
+            return Err(Error::msg("Destination Network Null".to_string()));
+        }
+    };
+    let network = match Network::get_network_by_id(pool, destination_network).await {
         Ok(network) => network,
-        Err(err) => return Err(Error::msg(format!("Error Getting Network: {}", err))),
+        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
     };
-    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
-        Ok(transport) => transport,
-        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    let to_token_address_id = match Uuid::from_str(&transaction.to_token_address) {
+        Ok(token_id) => token_id,
+        Err(err) => return Err(Error::msg(format!("Error getting token id: {}", err))),
     };
-    let web3 = web3::Web3::new(transport);
-    let bridge_address = match H160::from_str(network_rpc.bridge_address.as_str()) {
+    let token = match TokenAddress::get_token_address_by_id(pool, to_token_address_id).await {
+        Ok(token) => token,
+        Err(err) => return Err(Error::msg(format!("Error query token: {}", err))),
+    };
+    let abi = match TokenAddress::get_token_abi_by_id(pool, to_token_address_id).await {
+        Ok(abi) => abi,
+        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+    };
+    let actual_amount = transaction.transfer_amount.clone() - transaction.bridge_fee.clone();
+    println!("Transfer Amount actual: {}", actual_amount);
+    let chain_id = match get_chain_id(pool, destination_network).await {
+        Ok(chain_id) => chain_id,
+        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+    };
+    let bridge_address = match H160::from_str(&network.bridge_address) {
         Ok(address) => address,
         Err(err) => {
             return Err(Error::msg(format!(
@@ -441,146 +466,154 @@ pub async fn send_raw_transaction(
             )))
         }
     };
-    let nonce = match get_current_nonce(pool, network_id, bridge_address).await {
+    let nonce = match get_current_nonce(pool, destination_network, bridge_address).await {
         Ok(nonce) => nonce,
         Err(err) => return Err(Error::msg(format!("Error getting nonce: {}", err))),
     };
-    let gas = match get_gas_price(pool, network_id).await {
+    let gas_price = match get_gas_price(pool, destination_network).await {
         Ok(gas) => gas,
         Err(err) => return Err(Error::msg(format!("Error getting gas: {}", err))),
     };
     let call_req = CallRequest::builder().build();
-    let gas_price = match get_est_gas_price(pool, network_id, call_req).await {
+    let gas = match get_est_gas_price(pool, destination_network, call_req).await {
         Ok(gas_price) => gas_price,
         Err(err) => return Err(Error::msg(format!("Error getting gas price: {}", err))),
     };
-    let receiver_address = match H160::from_str(transaction.receiver_address.as_str()) {
-        Ok(address) => address,
-        Err(err) => {
-            return Err(Error::msg(format!(
-                "Error parsing receiver address: {}",
-                err
-            )))
-        }
+    let tx_req = TxRequest {
+        chain_id: chain_id.to_string(),
+        to: transaction.receiver_address.clone(),
+        nonce: nonce.to_string(),
+        value: actual_amount.to_string(),
+        gas: gas.to_string(),
+        gas_price: gas_price.to_string(),
     };
-    let actual_amount = transaction.transfer_amount.clone() - transaction.bridge_fee.clone();
-    let actual_transfer_amount = match U256::from_dec_str(&actual_amount.to_string()) {
-        Ok(value) => value,
-        Err(err) => {
-            return Err(Error::msg(format!(
-                "Error parsing receiver address: {}",
-                err
-            )))
-        }
+    let broadcast_tx_field = TxBroadcastRequest {
+        network_rpc: network.network_rpc.clone(),
+        bridge_address: network.bridge_address,
+        tx: tx_req.clone(),
+        token_address: Some(token.token_address),
+        abi: Some(abi),
     };
-    println!("Actual Transfer Amount: {}", actual_transfer_amount);
-    let tx = TransactionParameters {
-        nonce: Some(nonce),
-        to: Some(receiver_address),
-        gas: gas_price,
-        gas_price: Some(gas),
-        value: actual_transfer_amount,
-        ..Default::default()
+    println!("Broadcast Tx Field: {:?}", tx_req.clone());
+    let json_body = match serde_json::to_string(&broadcast_tx_field) {
+        Ok(json_body) => json_body,
+        Err(err) => return Err(Error::msg(format!("Error parsing body: {:?}", err))),
     };
-    let key = match SecretKey::from_str(p_k) {
-        Ok(k) => k,
-        Err(err) => return Err(Error::msg(format!("Error parsing key: {}", err))),
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://127.0.0.1:7000/sign-erc20-tx")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(json_body)
+        .send()
+        .await?;
+    let res_data = res.text().await?;
+    let response: ResponseRaw = serde_json::from_str(&res_data)?;
+    println!("Response: {:#?}", response);
+    let rlp = if response.status == "success" {
+        response.data
+    } else {
+        return Err(Error::msg("Raw Tx Not Found"));
     };
-    // Sign the transaction
-    let signed_tx = match web3.accounts().sign_transaction(tx, &key).await {
-        Ok(signed_tx) => signed_tx,
-        Err(err) => return Err(Error::msg(format!("Error signing transaction: {}", err))),
-    };
-    // Send the transaction
-    let tx_hash = match web3
-        .eth()
-        .send_raw_transaction(signed_tx.raw_transaction)
-        .await
-    {
+    let tx_hash = match broadcast_tx(network.network_rpc.clone(), rlp).await {
         Ok(tx_hash) => tx_hash,
         Err(err) => return Err(Error::msg(format!("Error sending transaction: {}", err))),
     };
-    println!("Transaction hash: {}", tx_hash);
+    println!("Tx hash: {:#?}", &tx_hash);
     Ok(tx_hash)
 }
 
-pub async fn send_erc20_token(
-    pool: &Pool<Postgres>,
-    network_id: Uuid,
-    transaction: &Transaction,
-    p_k: &str,
-) -> Result<H256, Error> {
-    let network_rpc = match Network::get_network_by_id(pool, network_id).await {
+pub async fn send_raw_tx(pool: &Pool<Postgres>, transaction: &Transaction) -> Result<H256, Error> {
+    let destination_network = match transaction.destin_network {
+        Some(network) => network,
+        None => {
+            return Err(Error::msg("Destination Network Null".to_string()));
+        }
+    };
+    let network = match Network::get_network_by_id(pool, destination_network).await {
         Ok(network) => network,
         Err(err) => return Err(Error::msg(format!("Error: {}", err))),
     };
-    let transport = match web3::transports::Http::new(&network_rpc.network_rpc) {
-        Ok(transport) => transport,
-        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
-    };
-    let to_token_address_id = match Uuid::from_str(transaction.to_token_address.as_str()) {
-        Ok(token_id) => token_id,
-        Err(err) => return Err(Error::msg(format!("Error getting token id: {}", err))),
-    };
-    let token = match TokenAddress::get_token_address_by_id(pool, to_token_address_id).await {
-        Ok(token) => token,
-        Err(err) => return Err(Error::msg(format!("Error query token: {}", err))),
-    };
-    let token_address = match Address::from_str(token.token_address.as_str()) {
-        Ok(address) => address,
-        Err(err) => {
-            return Err(Error::msg(format!("Error: {}", err)));
-        }
-    };
-    let abi = match TokenAddress::get_token_abi_by_id(pool, to_token_address_id).await {
-        Ok(abi) => abi,
-        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
-    };
-    let contract = match contract(transport, token_address, abi).await {
-        Ok(contract) => contract,
-        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
-    };
-    let receiver_address = match Address::from_str(transaction.receiver_address.as_str()) {
-        Ok(address) => address,
-        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
-    };
-    let key = match SecretKey::from_str(p_k) {
-        Ok(k) => k,
-        Err(err) => return Err(Error::msg(format!("Error parsing key: {}", err))),
-    };
     let actual_amount = transaction.transfer_amount.clone() - transaction.bridge_fee.clone();
-    let actual_transfer_amount = match U256::from_dec_str(&actual_amount.to_string()) {
-        Ok(value) => value,
+    println!("Transfer Amount actual: {}", actual_amount);
+    let chain_id = match get_chain_id(pool, destination_network).await {
+        Ok(chain_id) => chain_id,
+        Err(err) => return Err(Error::msg(format!("Error: {}", err))),
+    };
+    let bridge_address = match H160::from_str(&network.bridge_address) {
+        Ok(address) => address,
         Err(err) => {
             return Err(Error::msg(format!(
-                "Error parsing receiver address: {}",
+                "Fail to get parse bridge address: {}",
                 err
             )))
         }
     };
-    // let sign_tx = match contract
-    //     .sign
-    println!("Actual Transfer Amount: {}", actual_transfer_amount);
-    let send_transaction = match contract
-        .signed_call_with_confirmations(
-            "transfer",
-            (
-                Token::Address(receiver_address),
-                Token::Uint(actual_transfer_amount),
-            ),
-            Options::default(),
-            2,
-            &key,
-        )
-        .await
-    {
-        Ok(receipt) => {
-            println!("Broadcast Transaciton Receipt: {:#?}", receipt);
-            receipt.transaction_hash
-        }
-        Err(err) => {
-            return Err(err.into());
-        }
+    let nonce = match get_current_nonce(pool, destination_network, bridge_address).await {
+        Ok(nonce) => nonce,
+        Err(err) => return Err(Error::msg(format!("Error getting nonce: {}", err))),
     };
-    Ok(send_transaction)
+    let gas_price = match get_gas_price(pool, destination_network).await {
+        Ok(gas) => gas,
+        Err(err) => return Err(Error::msg(format!("Error getting gas: {}", err))),
+    };
+    let call_req = CallRequest::builder().build();
+    let gas = match get_est_gas_price(pool, destination_network, call_req).await {
+        Ok(gas_price) => gas_price,
+        Err(err) => return Err(Error::msg(format!("Error getting gas price: {}", err))),
+    };
+    let tx_req = TxRequest {
+        chain_id: chain_id.to_string(),
+        to: transaction.receiver_address.clone(),
+        nonce: nonce.to_string(),
+        value: actual_amount.to_string(),
+        gas: gas.to_string(),
+        gas_price: gas_price.to_string(),
+    };
+    let broadcast_tx_field = TxBroadcastRequest {
+        network_rpc: network.network_rpc.clone(),
+        bridge_address: network.bridge_address,
+        tx: tx_req.clone(),
+        token_address: None,
+        abi: None,
+    };
+    println!("Broadcast tx field: {:?}", broadcast_tx_field);
+    let json_body = match serde_json::to_string(&broadcast_tx_field) {
+        Ok(json_body) => json_body,
+        Err(err) => return Err(Error::msg(format!("Error parsing body: {:?}", err))),
+    };
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://127.0.0.1:7000/sign-raw-tx")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(json_body)
+        .send()
+        .await?;
+    let res_data = res.text().await?;
+    let response: ResponseRaw = serde_json::from_str(&res_data)?;
+    println!("Response: {:#?}", response);
+    let rlp = if response.status == "success" {
+        response.data
+    } else {
+        return Err(Error::msg("Raw Tx Not Found"));
+    };
+    let tx_hash = match broadcast_tx(network.network_rpc.clone(), rlp).await {
+        Ok(tx_hash) => tx_hash,
+        Err(err) => return Err(Error::msg(format!("Error sending transaction: {}", err))),
+    };
+    println!("Tx hash: {:#?}", &tx_hash);
+    Ok(tx_hash)
+}
+
+async fn broadcast_tx(network_rpc: String, rlp: Bytes) -> Result<H256, Error> {
+    let transport = match web3::transports::Http::new(&network_rpc) {
+        Ok(transport) => transport,
+        Err(err) => return Err(Error::msg(format!("Error Initialize Transport: {}", err))),
+    };
+    let web3 = web3::Web3::new(transport.clone());
+    println!("RLP: {:#?}", rlp);
+    let tx_hash = match web3.eth().send_raw_transaction(rlp).await {
+        Ok(tx_hash) => tx_hash,
+        Err(err) => return Err(Error::msg(format!("Error broadcast: {}", err))),
+    };
+    Ok(tx_hash)
 }

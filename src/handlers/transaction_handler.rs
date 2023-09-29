@@ -8,8 +8,7 @@ use crate::{
     },
     utils::transaction_module::{
         generate_error_response, get_base_fee, get_confirmed_block, get_est_gas_price, get_tx,
-        get_tx_receipt, send_erc20_token, send_raw_transaction, token_converter,
-        validate_account_balance,
+        get_tx_receipt, send_erc20, send_raw_tx, token_converter, validate_account_balance,
     },
 };
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
@@ -721,7 +720,7 @@ pub async fn broadcast_tx(
     // validate transaction status from db
     match TransactionStatus::get_transaction_status(&data.db, tx_status_id).await {
         Ok(tx_status) => {
-            if tx_status.status_name != "Unconfirmed" {
+            if tx_status.status_name != "Unconfirmed" && tx_status.status_name != "Pending" {
                 let json_response = serde_json::json!({
                     "status": "fail",
                     "data": format!(
@@ -794,14 +793,11 @@ pub async fn broadcast_tx(
     //     }
     // };
     // ============ WILL MOVE TO HSM SIGN TX MACHANISM =================
-    let p_k: String = dotenvy::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
-    let tx: H256;
-    if to_token.asset_type == "0" {
-        match send_raw_transaction(&data.db, destination_network, &transaction, p_k.as_str()).await
-        {
+    let tx: H256 = if to_token.asset_type == "0" {
+        match send_raw_tx(&data.db, &transaction).await {
             Ok(tx_hash) => {
                 std::thread::sleep(std::time::Duration::from_secs(5));
-                tx = tx_hash
+                tx_hash
             }
             Err(err) => {
                 let json_response = serde_json::json!({
@@ -812,8 +808,11 @@ pub async fn broadcast_tx(
             }
         }
     } else if to_token.asset_type == "1" {
-        match send_erc20_token(&data.db, destination_network, &transaction, p_k.as_str()).await {
-            Ok(tx_hash) => tx = tx_hash,
+        match send_erc20(&data.db, &transaction).await {
+            Ok(tx_hash) => {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                tx_hash
+            }
             Err(err) => {
                 let json_response = serde_json::json!({
                     "status": "fail",
@@ -828,13 +827,15 @@ pub async fn broadcast_tx(
             "data": format!("Asset Type Not Supported")
         });
         return Ok(Json(json_response));
-    }
+    };
     // get transaciton receipt from hash
+    std::thread::sleep(std::time::Duration::from_secs(5));
     let new_tx_receipt = match get_tx(&data.db, destination_network, format!("{:?}", tx)).await {
         Ok(tx) => tx,
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
+                "tx_hash": format!("{}", tx),
                 "data": format!("Error getting transaction: {}", err)
             });
             return Ok(Json(json_response));
@@ -916,7 +917,7 @@ pub async fn broadcast_tx(
                                     "status": "success",
                                     "data": {
                                         "Transaction hash": tx.transaction_hash,
-                                        "Transaction Status": "success"
+                                        "Transaction status": "success"
                                     }
                                 });
                                 Ok(Json(json_response))
