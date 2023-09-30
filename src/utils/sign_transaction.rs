@@ -334,11 +334,11 @@ fn sign_raw(tx: &TransactionParam, sign: impl signing::Key, chain_id: u64) -> Si
     let hash = signing::keccak256(encoded.as_ref());
 
     let signature = if adjust_v_value {
-        sign.sign_message(&hash)
+        sign.sign(&hash, Some(chain_id))
             .expect("hash is non-zero 32-bytes; qed")
     } else {
         sign.sign_message(&hash)
-            .expect("hash is non-zero 32-bytes, qed")
+            .expect("hash is non-zero 32-bytes; qed")
     };
 
     let signed = encode(tx, chain_id, Some(&signature));
