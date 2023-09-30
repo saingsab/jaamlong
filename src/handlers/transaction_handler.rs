@@ -916,6 +916,7 @@ pub async fn broadcast_tx(
                                 let json_response = serde_json::json!({
                                     "status": "success",
                                     "data": {
+                                        "Transaction ID": payload.id,
                                         "Transaction hash": tx.transaction_hash,
                                         "Transaction status": "success"
                                     }
@@ -943,6 +944,7 @@ pub async fn broadcast_tx(
                                 let json_response = serde_json::json!({
                                     "status": "fail",
                                     "data": {
+                                        "Transaction ID": payload.id,
                                         "Transaction hash": tx.transaction_hash,
                                         "Transaction Status": "Fail"
                                     }
@@ -952,7 +954,10 @@ pub async fn broadcast_tx(
                             Err(err) => {
                                 let json_response = serde_json::json!({
                                     "status": "fail",
-                                    "data": format!("Err Updating Tx Status: {}", err)
+                                    "data": {
+                                        "tx_id": payload.id,
+                                        "message": format!("Err Updating Tx Status: {}", err)
+                                    }
                                 });
                                 return Ok(Json(json_response));
                             }
@@ -960,7 +965,10 @@ pub async fn broadcast_tx(
                     } else {
                         let json_response = serde_json::json!({
                             "status": "fail",
-                            "data": format!("Status not found")
+                            "data": {
+                                "tx_id": payload.id,
+                                "message": "Error: Status not Found"
+                            }
                         });
                         return Ok(Json(json_response));
                     }
@@ -968,7 +976,10 @@ pub async fn broadcast_tx(
                 None => {
                     let json_response = serde_json::json!({
                         "status": "fail",
-                        "data": format!("Status not found")
+                        "data": {
+                            "tx_id": payload.id,
+                            "message": "Error: Status not Found"
+                        }
                     });
                     Ok(Json(json_response))
                 }
@@ -977,7 +988,10 @@ pub async fn broadcast_tx(
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": format!("Err getting tx receipt: {}", err)
+                "data": {
+                    "tx_id": payload.id,
+                    "message": format!("Err getting tx receipt: {}", err)
+                }
             });
             Ok(Json(json_response))
         }
