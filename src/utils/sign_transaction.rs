@@ -163,7 +163,6 @@ pub async fn sign_raw_tx(transaction: &TxBroadcastRequest) -> Result<Bytes, Erro
         gas_price: Some(gas_price),
         ..Default::default()
     };
-    println!("Tx P: {:#?}", tx_p);
     let max_priority_fee_per_gas = match tx_p.transaction_type {
         Some(tx_type) if tx_type == U64::from(EIP1559_TX_ID) => {
             tx_p.max_priority_fee_per_gas.unwrap_or(gas_price)
