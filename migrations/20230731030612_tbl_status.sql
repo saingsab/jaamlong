@@ -2,7 +2,7 @@
 CREATE TABLE
     IF NOT EXISTS tbl_status (
         id UUID PRIMARY KEY NOT NULL DEFAULT (uuid_generate_v4()),
-        status_name VARCHAR(8) NOT NULL,
+        status_name VARCHAR(20) NOT NULL,
         created_by UUID,
         created_at TIMESTAMP
         WITH

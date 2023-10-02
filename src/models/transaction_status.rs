@@ -94,7 +94,7 @@ impl TransactionStatus {
         tx_status: RequestInsertTxStatus,
     ) -> Result<Self, sqlx::Error> {
         let id: Uuid = sqlx::query!(
-            "INSERT INTO tbl_status (status_name, created_by) VALUES ($1, $2) RETURNING id",
+            r#"INSERT INTO tbl_status (status_name, created_by) VALUES ($1, $2) RETURNING id"#,
             tx_status.status_name,
             tx_status.created_by,
         )
@@ -116,12 +116,15 @@ impl TransactionStatus {
         status_name: String,
     ) -> Result<PgQueryResult, sqlx::Error> {
         let result = sqlx::query!(
-            "UPDATE tbl_status SET status_name = $1, updated_at = NOW() WHERE id = $2",
+            r#"UPDATE tbl_status SET status_name = $1, updated_at = NOW() WHERE id = $2"#,
             status_name,
             id
         )
         .execute(pool)
-        .await?;
-        Ok(result)
+        .await;
+        match result {
+            Ok(result) => Ok(result),
+            Err(e) => Err(e),
+        }
     }
 }

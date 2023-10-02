@@ -19,7 +19,7 @@ use std::{str::FromStr, sync::Arc};
 use uuid::Uuid;
 use web3::{
     ethabi::{decode, ParamType},
-    types::{Address, BlockId, CallRequest, U256, U64},
+    types::{Address, BlockId, CallRequest, H256, U256, U64},
 };
 
 #[derive(Deserialize)]
@@ -269,7 +269,7 @@ pub async fn request_tx(
         }
     };
     let tx_status = RequestInsertTxStatus {
-        status_name: String::from("Pending"),
+        status_name: String::from("Unconfirmed"),
         created_by: Some(Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
             payload.sender_address.clone().as_bytes(),
@@ -390,12 +390,12 @@ pub async fn broadcast_tx(
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": format!("Err: {}", err)
+                "data": format!("Err getting Tx: {}", err)
             });
             return Ok(Json(json_response));
         }
     };
-    //get bridge address
+    //validate destination network
     let destination_network = match transaction.destin_network {
         Some(network) => network,
         None => {
@@ -406,9 +406,32 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     };
-    // query network id from transaction id
-    let network = match Network::get_network_by_id(&data.db, destination_network).await {
-        Ok(network_id) => network_id,
+    //validate origin network
+    let origin_network = match transaction.origin_network {
+        Some(network) => network,
+        None => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": "Destination Network Not Found"
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    // query bridge address by destination network
+    let bridge_address = match Network::get_network_by_id(&data.db, destination_network).await {
+        Ok(res_network) => {
+            let bridge_address = match Address::from_str(res_network.bridge_address.as_str()) {
+                Ok(address) => address,
+                Err(err) => {
+                    let json_response = serde_json::json!({
+                        "status": "fail",
+                        "data": format!("Err parsing bridge address: {}", err)
+                    });
+                    return Ok(Json(json_response));
+                }
+            };
+            bridge_address
+        }
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
@@ -417,12 +440,77 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     };
-    let bridge_address = match Address::from_str(network.bridge_address.as_str()) {
-        Ok(address) => address,
+    //validate receive transaction with tx_hash
+    let tx_receipt = match get_tx_receipt(&data.db, origin_network, payload.hash.clone()).await {
+        Ok(receipt) => {
+            //validate tx status
+            match receipt.status {
+                Some(status) => {
+                    if status == U64::from(1) {
+                        println!("Transaction Status success, status: {:?}", status);
+                    } else if status == U64::from(0) {
+                        let json_response = serde_json::json!({
+                            "status": "fail",
+                            "data": format!("Transaction failed")
+                        });
+                        return Ok(Json(json_response));
+                    } else {
+                        let json_response = serde_json::json!({
+                            "status": "fail",
+                            "data": format!("Status not found")
+                        });
+                        return Ok(Json(json_response));
+                    }
+                }
+                None => {
+                    let json_response = serde_json::json!({
+                        "status": "fail",
+                        "data": format!("Status not found")
+                    });
+                    return Ok(Json(json_response));
+                }
+            }
+            // validate confirmation block
+            match get_confirmed_block(
+                &data.db,
+                origin_network,
+                BlockId::Hash(receipt.block_hash.unwrap()),
+            )
+            .await
+            {
+                Ok(block_confirmation) => {
+                    //check if block_confirmation is greater than 2. Negative numbers return None
+                    match &block_confirmation.checked_sub(U64::from(2)) {
+                        Some(_block_num) => {
+                            println!(
+                                "Success, Number of Confirmation Blocks: {}",
+                                &block_confirmation
+                            );
+                        }
+                        None => {
+                            let json_response = serde_json::json!({
+                                "status": "fail",
+                                "data": format!("Block confirmation less than 2")
+                            });
+                            return Ok(Json(json_response));
+                        }
+                    }
+                    println!("Block Confirmation: {:#?}", block_confirmation);
+                }
+                Err(err) => {
+                    let json_response = serde_json::json!({
+                        "status": "fail",
+                        "data": format!("Err: {}", err)
+                    });
+                    return Ok(Json(json_response));
+                }
+            }
+            receipt
+        }
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": format!("Err parsing bridge address: {}", err)
+                "data": format!("Err: {}", err)
             });
             return Ok(Json(json_response));
         }
@@ -459,16 +547,10 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     };
-    //validate receive transaction
+    // perform validation between tx_receipt and tx_db
     if from_token.asset_type == "0" {
         // for native token type, get transaciton from hash
-        match get_tx(
-            &data.db,
-            transaction.origin_network.unwrap(),
-            payload.hash.clone(),
-        )
-        .await
-        {
+        match get_tx(&data.db, origin_network, payload.hash.clone()).await {
             Ok(tx) => {
                 //validate from address
                 match Some(tx.from) {
@@ -523,48 +605,14 @@ pub async fn broadcast_tx(
                 };
                 println!("Transfer value: {:#?}", &transfer_value_int);
                 println!("Bridge fee: {}", &transaction.bridge_fee);
-                let actual_transfer_amount = transfer_value_int - transaction.bridge_fee.clone();
-                if actual_transfer_amount != transaction.transfer_amount.clone() {
+                let actual_transfer_amount =
+                    transaction.transfer_amount.clone() + transaction.bridge_fee.clone();
+                if actual_transfer_amount != transfer_value_int {
                     let json_response = serde_json::json!({
                         "status": "fail",
                         "data": format!("Value does not match")
                     });
                     return Ok(Json(json_response));
-                }
-                // validate confirmation block
-                match get_confirmed_block(
-                    &data.db,
-                    transaction.origin_network.unwrap(),
-                    BlockId::Hash(tx.block_hash.unwrap()),
-                )
-                .await
-                {
-                    Ok(block_confirmation) => {
-                        //check if block_confirmation is greater than 2. Negative numbers return None
-                        match &block_confirmation.checked_sub(U64::from(2)) {
-                            Some(_block_num) => {
-                                println!(
-                                    "Success, Number of Confirmation Blocks: {}",
-                                    &block_confirmation
-                                );
-                            }
-                            None => {
-                                let json_response = serde_json::json!({
-                                    "status": "fail",
-                                    "data": format!("Block confirmation less than 2")
-                                });
-                                return Ok(Json(json_response));
-                            }
-                        }
-                        println!("Block Confirmation: {:#?}", block_confirmation);
-                    }
-                    Err(err) => {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Err: {}", err)
-                        });
-                        return Ok(Json(json_response));
-                    }
                 }
             }
             Err(err) => {
@@ -576,149 +624,136 @@ pub async fn broadcast_tx(
             }
         };
     } else if from_token.asset_type == "1" {
-        // for erc20 asset type
-        match get_tx_receipt(
-            &data.db,
-            transaction.origin_network.unwrap(),
-            payload.hash.clone(),
-        )
-        .await
-        {
-            Ok(tx) => {
-                let logs = tx.logs.into_iter();
-                let mut topics = Vec::new();
-                if let Some(log) = logs.into_iter().next() {
-                    for topic in log.topics.into_iter() {
-                        topics.push(topic);
-                    }
-                    let bytes_data = log.data;
-                    // Convert web3::types::Bytes to &[u8]
-                    let byte_slice = &bytes_data.0;
-                    // Interpret the byte slice based on the specific data format (ABI)
-                    let abi_type = ParamType::Uint(256);
-                    // Decode the byte slice
-                    let decoded_data = decode(&[abi_type], byte_slice).expect("Decoding failed");
-                    // Extract and display the decoded value
-                    let value = &decoded_data[0];
-                    println!("Value from log: {:#?}", &value);
-                    let transfer_value_int = match value.clone().into_uint() {
-                        Some(value) => BigDecimal::from_str(value.to_string().as_str()).unwrap(),
-                        None => {
-                            let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": "Error converting transfer value to int"
-                             });
-                            return Ok(Json(json_response));
-                        }
-                    };
-                    println!("Transaction: {:#?}", transaction);
-                    let bridge_fee_parse = match BigDecimal::from_str(<&str>::clone(
-                        &transaction.bridge_fee.to_string().as_str(),
-                    )) {
-                        Ok(value) => value,
-                        Err(err) => {
-                            let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Error parsing bridge fee: {}", err)
-                                });
-                            return Ok(Json(json_response));
-                        }
-                    };
-                    let actual_transfer_amount = transfer_value_int - bridge_fee_parse;
-                    // validate the value transfer
-                    if actual_transfer_amount != transaction.transfer_amount.clone() {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Value does not match")
-                        });
-                        return Ok(Json(json_response));
-                    }
-                }
-                let from_address = Address::from(topics[1]); //sender address
-                let to_address = Address::from(topics[2]); //receiver address
-                if from_address //validate from address
-                    != Address::from_str(&transaction.sender_address)
-                        .expect("Error decoding address")
-                {
-                    let json_response = serde_json::json!({
-                        "status": "fail",
-                        "data": format!("To address does not match")
-                    });
-                    return Ok(Json(json_response));
-                }
-                // validate to address which must be bridge address
-                if to_address != bridge_address {
-                    let json_response = serde_json::json!({
-                        "status": "fail",
-                        "data": format!("To address does not match")
-                    });
-                    return Ok(Json(json_response));
-                }
-                // validate confirmation block
-                match get_confirmed_block(
-                    &data.db,
-                    transaction.origin_network.unwrap(),
-                    BlockId::Hash(tx.block_hash.unwrap()),
-                )
-                .await
-                {
-                    Ok(block_confirmation) => {
-                        //check if block_confirmation is greater than 2. Negative numbers return None
-                        match &block_confirmation.checked_sub(U64::from(2)) {
-                            Some(_block_num) => {
-                                println!(
-                                    "Success, Number of Confirmation Blocks: {}",
-                                    &block_confirmation
-                                );
-                            }
-                            None => {
-                                let json_response = serde_json::json!({
-                                    "status": "fail",
-                                    "data": format!("Block confirmation less than 2")
-                                });
-                                return Ok(Json(json_response));
-                            }
-                        }
-                        println!("Block Confirmation: {:#?}", block_confirmation);
-                    }
+        // for erc20 asset typ
+        let logs = tx_receipt.logs.into_iter();
+        let mut topics = Vec::new();
+        if let Some(log) = logs.into_iter().next() {
+            for topic in log.topics.into_iter() {
+                topics.push(topic);
+            }
+            let bytes_data = log.data;
+            // Convert web3::types::Bytes to &[u8]
+            let byte_slice = &bytes_data.0;
+            // Interpret the byte slice based on the specific data format (ABI)
+            let abi_type = ParamType::Uint(256);
+            // Decode the byte slice
+            let decoded_data = decode(&[abi_type], byte_slice).expect("Decoding failed");
+            // Extract and display the decoded value
+            let value = &decoded_data[0];
+            println!("Value from log: {:#?}", &value);
+            let transfer_value_int = match value.clone().into_uint() {
+                Some(value) => match BigDecimal::from_str(&value.to_string()) {
+                    Ok(value) => value,
                     Err(err) => {
                         let json_response = serde_json::json!({
                             "status": "fail",
-                            "data": format!("Err: {}", err)
+                            "data": format!("Error parsing transfer int: {}", err)
                         });
                         return Ok(Json(json_response));
                     }
+                },
+                None => {
+                    let json_response = serde_json::json!({
+                        "status": "fail",
+                        "data": "Error converting transfer value to int"
+                    });
+                    return Ok(Json(json_response));
                 }
-            }
-            Err(err) => {
+            };
+            println!("Transaction: {:#?}", transaction);
+            let bridge_fee_parse = match BigDecimal::from_str(<&str>::clone(
+                &transaction.bridge_fee.to_string().as_str(),
+            )) {
+                Ok(value) => value,
+                Err(err) => {
+                    let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": format!("Error parsing bridge fee: {}", err)
+                        });
+                    return Ok(Json(json_response));
+                }
+            };
+            let actual_transfer_amount = transfer_value_int - bridge_fee_parse;
+            // validate the value transfer
+            if actual_transfer_amount != transaction.transfer_amount.clone() {
                 let json_response = serde_json::json!({
                     "status": "fail",
-                    "data": format!("Err Transaction Receipt: {}", err)
+                    "data": format!("Error: Value does not match")
                 });
                 return Ok(Json(json_response));
             }
         }
+        let from_address = Address::from(topics[1]); //sender address
+        let to_address = Address::from(topics[2]); //receiver address
+        if from_address //validate from address
+            != Address::from_str(&transaction.sender_address)
+                .expect("Error decoding address")
+        {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Error: To address does not match")
+            });
+            return Ok(Json(json_response));
+        }
+        // validate to address which must be bridge address
+        println!(
+            "To address: {}, \nbridge address: {}",
+            to_address, bridge_address,
+        );
+        if to_address != bridge_address {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Error: To address does not match")
+            });
+            return Ok(Json(json_response));
+        }
     }
+    let tx_status_id = match transaction.tx_status {
+        Some(tx_status) => tx_status,
+        None => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": "Tx Status Not Found"
+            });
+            return Ok(Json(json_response));
+        }
+    };
     // validate transaction status from db
-    match TransactionStatus::get_transaction_status(&data.db, transaction.tx_status.unwrap()).await
-    {
+    match TransactionStatus::get_transaction_status(&data.db, tx_status_id).await {
         Ok(tx_status) => {
-            if tx_status.status_name != "Pending" {
+            if tx_status.status_name != "Unconfirmed" {
                 let json_response = serde_json::json!({
                     "status": "fail",
-                    "data": format!("Transaction not in Pending state. Current State: {}", tx_status.status_name)
+                    "data": format!(
+                        "TransactionID: {} is not in Unconfirmed state. Current State: {}",
+                        &payload.id,
+                        tx_status.status_name,
+                    )
                 });
                 return Ok(Json(json_response));
             }
             println!(
                 "Transaciton ID: {}, \nStatus: {:#?}",
-                &payload.id, tx_status
+                &payload.id, tx_status.status_name
             );
         }
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": format!("Err: {}", err)
+                "data": format!("Failed to find tx status: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    }
+    // update tx status to pending
+    match TransactionStatus::update_status(&data.db, tx_status_id, "Pending".to_string()).await {
+        Ok(tx_status) => {
+            println!("Updated Status: {:#?}", tx_status);
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err updating status: {}", err)
             });
             return Ok(Json(json_response));
         }
@@ -758,148 +793,133 @@ pub async fn broadcast_tx(
     //         return Ok(Json(json_response));
     //     }
     // };
+    // ============ WILL MOVE TO HSM SIGN TX MACHANISM =================
     let p_k: String = dotenvy::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
+    let tx: H256;
     if to_token.asset_type == "0" {
-        match send_raw_transaction(&data.db, network.id, &transaction, p_k.as_str()).await {
-            Ok(tx) => {
+        match send_raw_transaction(&data.db, destination_network, &transaction, p_k.as_str()).await
+        {
+            Ok(tx_hash) => {
                 std::thread::sleep(std::time::Duration::from_secs(5));
-                // get transaciton receipt from hash
-                let new_tx_receipt = match get_tx(&data.db, network.id, format!("{:?}", tx)).await {
-                    Ok(tx) => tx,
-                    Err(err) => {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Error getting transaction: {}", err)
-                        });
-                        return Ok(Json(json_response));
-                    }
-                };
-                //insert destination hash to db
-                match Transaction::update_tx_hash(
-                    &data.db,
-                    transaction.id,
-                    Some(payload.hash),
-                    Some(format!("{:?}", tx)),
-                )
-                .await
-                {
-                    Ok(updated_tx) => {
-                        println!("Update tx: {:?}", updated_tx);
-                    }
-                    Err(err) => {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Err updating tx: {}", err)
-                        });
-                        return Ok(Json(json_response));
-                    }
+                tx = tx_hash
+            }
+            Err(err) => {
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": format!("Error while Sending Raw Tx: {}", err)
+                });
+                return Ok(Json(json_response));
+            }
+        }
+    } else if to_token.asset_type == "1" {
+        match send_erc20_token(&data.db, destination_network, &transaction, p_k.as_str()).await {
+            Ok(tx_hash) => tx = tx_hash,
+            Err(err) => {
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": format!("Error while Sending ERC20 Token: {}", err)
+                });
+                return Ok(Json(json_response));
+            }
+        }
+    } else {
+        let json_response = serde_json::json!({
+            "status": "fail",
+            "data": format!("Asset Type Not Supported")
+        });
+        return Ok(Json(json_response));
+    }
+    // get transaciton receipt from hash
+    let new_tx_receipt = match get_tx(&data.db, destination_network, format!("{:?}", tx)).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Error getting transaction: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    //insert destination hash to db
+    match Transaction::update_tx_hash(
+        &data.db,
+        transaction.id,
+        Some(payload.hash),
+        Some(format!("{:?}", tx)),
+    )
+    .await
+    {
+        Ok(updated_tx) => {
+            println!("Update tx: {:?}", updated_tx);
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err updating tx: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    }
+    println!("New Tx: {:#?}", &new_tx_receipt);
+    //check block confirmation
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    match get_confirmed_block(
+        &data.db,
+        destination_network,
+        BlockId::Hash(new_tx_receipt.block_hash.expect("Failed to get block hash")),
+    )
+    .await
+    {
+        Ok(num_block_confirmation) => {
+            //check if block_confirmation is greater than 2. Negative numbers return None
+            match &num_block_confirmation.checked_sub(U64::from(2)) {
+                Some(_block_num) => {
+                    println!(
+                        "Success, Number of Confirmation Blocks: {}",
+                        &num_block_confirmation,
+                    );
                 }
-                println!("New Tx: {:#?}", &new_tx_receipt);
-                //check block confirmation
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                match get_confirmed_block(
-                    &data.db,
-                    network.id,
-                    BlockId::Hash(new_tx_receipt.block_hash.expect("Failed to get block hash")),
-                )
-                .await
-                {
-                    Ok(num_block_confirmation) => {
-                        println!("Block confirmation #######: {}", num_block_confirmation);
-                        if num_block_confirmation.checked_sub(U64::from(2)).is_none() {
-                            std::thread::sleep(std::time::Duration::from_secs(5));
-                        }
-                        //check if block_confirmation is greater than 2. Negative numbers return None
-                        match &num_block_confirmation.checked_sub(U64::from(2)) {
-                            Some(_block_num) => {
-                                println!(
-                                    "Success, Number of Confirmation Blocks: {}",
-                                    &num_block_confirmation,
-                                );
-                            }
-                            None => {
-                                let json_response = serde_json::json!({
-                                    "status": "fail",
-                                    "data": format!("Block confirmation less than 2")
-                                });
-                                return Ok(Json(json_response));
-                            }
-                        }
-                        println!("Block confirmation: {:#?}", num_block_confirmation);
-                        match get_tx_receipt(
+                None => {
+                    println!("Block confirmation: {:#?}", num_block_confirmation);
+                    let json_response = serde_json::json!({
+                        "status": "fail",
+                        "data": format!("Block confirmation less than 2")
+                    });
+                    return Ok(Json(json_response));
+                }
+            }
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err Getting Block Confirmation: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    }
+    // validation tx receipt status
+    match get_tx_receipt(&data.db, destination_network, format!("{:?}", tx)).await {
+        Ok(tx) => {
+            match tx.status {
+                Some(status) => {
+                    if status == U64::from(1) {
+                        //update tx status to success
+                        match TransactionStatus::update_status(
                             &data.db,
-                            transaction.destin_network.unwrap(),
-                            format!("{:?}", tx),
+                            tx_status_id,
+                            "Success".to_string(),
                         )
                         .await
                         {
-                            Ok(tx) => {
-                                match tx.status {
-                                    Some(status) => {
-                                        if status == U64::from(1) {
-                                            //update tx status to success
-                                            match TransactionStatus::update_status(
-                                                &data.db,
-                                                transaction.tx_status.unwrap(),
-                                                "Success".to_string(),
-                                            )
-                                            .await
-                                            {
-                                                Ok(_status) => {
-                                                    let json_response = serde_json::json!({
-                                                        "status": "fail",
-                                                        "data": format!("Transaction Status: {}\nBroadcast Tx Hash: {:#?}", tx.status.unwrap(), tx.transaction_hash)
-                                                    });
-                                                    Ok(Json(json_response))
-                                                }
-                                                Err(err) => {
-                                                    let json_response = serde_json::json!({
-                                                        "status": "fail",
-                                                        "data": format!("Err Updating Tx Status: {}", err)
-                                                    });
-                                                    Ok(Json(json_response))
-                                                }
-                                            }
-                                        } else if status == U64::from(0) {
-                                            //update tx status to fail
-                                            match TransactionStatus::update_status(
-                                                &data.db,
-                                                transaction.tx_status.unwrap(),
-                                                "Fail".to_string(),
-                                            )
-                                            .await
-                                            {
-                                                Ok(_status) => {
-                                                    let json_response = serde_json::json!({
-                                                        "status": "fail",
-                                                        "data": format!("Transaction Status: {}, Broadcast Tx Hash: {:#?}", tx.status.unwrap(), tx.transaction_hash)
-                                                    });
-                                                    return Ok(Json(json_response));
-                                                }
-                                                Err(err) => {
-                                                    let json_response = serde_json::json!({
-                                                        "status": "fail",
-                                                        "data": format!("Err Updating Tx Status: {}", err)
-                                                    });
-                                                    return Ok(Json(json_response));
-                                                }
-                                            }
-                                        } else {
-                                            let json_response = serde_json::json!({
-                                                "status": "fail",
-                                                "data": format!("Status not found")
-                                            });
-                                            return Ok(Json(json_response));
-                                        }
+                            Ok(_status) => {
+                                let json_response = serde_json::json!({
+                                    "status": "success",
+                                    "data": {
+                                        "Transaction hash": tx.transaction_hash,
+                                        "Transaction Status": "success"
                                     }
-                                    None => {
-                                        let json_response = serde_json::json!({
-                                            "status": "fail",
-                                            "data": format!("Status not found")
-                                        });
-                                        Ok(Json(json_response))
-                                    }
-                                }
+                                });
+                                Ok(Json(json_response))
                             }
                             Err(err) => {
                                 let json_response = serde_json::json!({
@@ -909,176 +929,56 @@ pub async fn broadcast_tx(
                                 Ok(Json(json_response))
                             }
                         }
-                    }
-                    Err(err) => {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Err Getting Block Confirmation: {}", err)
-                        });
-                        Ok(Json(json_response))
-                    }
-                }
-            }
-            Err(err) => {
-                let json_response = serde_json::json!({
-                    "status": "fail",
-                    "data": format!("Err: {}", err)
-                });
-                Ok(Json(json_response))
-            }
-        }
-    } else if to_token.asset_type == "1" {
-        match send_erc20_token(&data.db, network.id, &transaction, p_k.as_str()).await {
-            Ok(tx) => {
-                let new_tx_receipt = match get_tx(&data.db, network.id, format!("{:?}", tx)).await {
-                    Ok(tx) => tx,
-                    Err(err) => {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Err Query Tx Hash: {}", err)
-                        });
-                        return Ok(Json(json_response));
-                    }
-                };
-                //insert destination hash to db
-                match Transaction::update_tx_hash(
-                    &data.db,
-                    transaction.id,
-                    Some(payload.hash),
-                    Some(format!("{:?}", tx)),
-                )
-                .await
-                {
-                    Ok(updated_tx) => {
-                        println!("Update tx: {:?}", updated_tx);
-                    }
-                    Err(err) => {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": format!("Err Updating Tx: {}", err)
-                        });
-                        return Ok(Json(json_response));
-                    }
-                }
-                //check block confirmation
-                match get_confirmed_block(
-                    &data.db,
-                    network.id,
-                    BlockId::Hash(new_tx_receipt.block_hash.unwrap()),
-                )
-                .await
-                {
-                    Ok(num_block_confirmation) => {
-                        //check if block_confirmation is greater than 2. Negative numbers return None
-                        match &num_block_confirmation.checked_sub(U64::from(2)) {
-                            Some(_block_num) => {
-                                println!(
-                                    "Success, Number of Confirmation Blocks: {}",
-                                    &num_block_confirmation
-                                );
-                            }
-                            None => {
+                    } else if status == U64::from(0) {
+                        //update tx status to fail
+                        match TransactionStatus::update_status(
+                            &data.db,
+                            tx_status_id,
+                            "Fail".to_string(),
+                        )
+                        .await
+                        {
+                            Ok(_status) => {
                                 let json_response = serde_json::json!({
                                     "status": "fail",
-                                    "data": format!("Block confirmation less than 2")
-                                });
-                                return Ok(Json(json_response));
-                            }
-                        }
-                        println!("Block confirmation: {:#?}", num_block_confirmation);
-                        match get_tx_receipt(&data.db, network.id, format!("{:?}", tx)).await {
-                            Ok(tx) => {
-                                match tx.status {
-                                    Some(status) => {
-                                        println!("Status: {:?}", status);
-                                        if status == U64::from(1) {
-                                            //update tx status to success
-                                            match TransactionStatus::update_status(
-                                                &data.db,
-                                                transaction.tx_status.unwrap(),
-                                                "Success".to_string(),
-                                            )
-                                            .await
-                                            {
-                                                Ok(status) => {
-                                                    println!("Tx Status: {:#?}", status);
-                                                }
-                                                Err(err) => {
-                                                    let json_response = serde_json::json!({
-                                                        "status": "fail",
-                                                        "data": format!("Err: {}", err)
-                                                    });
-                                                    return Ok(Json(json_response));
-                                                }
-                                            }
-                                        } else if status == U64::from(0) {
-                                            //update tx status to fail
-                                            match TransactionStatus::update_status(
-                                                &data.db,
-                                                transaction.tx_status.unwrap(),
-                                                "Fail".to_string(),
-                                            )
-                                            .await
-                                            {
-                                                Ok(status) => {
-                                                    println!("Tx Status: {:#?}", status);
-                                                }
-                                                Err(err) => {
-                                                    let json_response = serde_json::json!({
-                                                        "status": "fail",
-                                                        "data": format!("Err: {}", err)
-                                                    });
-                                                    return Ok(Json(json_response));
-                                                }
-                                            }
-                                        }
+                                    "data": {
+                                        "Transaction hash": tx.transaction_hash,
+                                        "Transaction Status": "Fail"
                                     }
-                                    None => {
-                                        let json_response = serde_json::json!({
-                                            "status": "fail",
-                                            "data": format!("Status not found")
-                                        });
-                                        return Ok(Json(json_response));
-                                    }
-                                }
-                                println!("Broadcast transaction: {:#?}", &new_tx_receipt);
-                                let json_response = serde_json::json!({
-                                    "status": "success",
-                                    "data": &new_tx_receipt
                                 });
                                 Ok(Json(json_response))
                             }
                             Err(err) => {
                                 let json_response = serde_json::json!({
                                     "status": "fail",
-                                    "data": format!("Err Getting Transaction Receipt: {}", err)
+                                    "data": format!("Err Updating Tx Status: {}", err)
                                 });
                                 return Ok(Json(json_response));
                             }
                         }
-                    }
-                    Err(err) => {
+                    } else {
                         let json_response = serde_json::json!({
                             "status": "fail",
-                            "data": format!("Err: {}", err)
+                            "data": format!("Status not found")
                         });
                         return Ok(Json(json_response));
                     }
                 }
-            }
-            Err(err) => {
-                let json_response = serde_json::json!({
-                    "status": "fail",
-                    "data": format!("Err: {}", err)
-                });
-                Ok(Json(json_response))
+                None => {
+                    let json_response = serde_json::json!({
+                        "status": "fail",
+                        "data": format!("Status not found")
+                    });
+                    Ok(Json(json_response))
+                }
             }
         }
-    } else {
-        let json_response = serde_json::json!({
-            "status": "fail",
-            "data": format!("Asset Type Not Supported")
-        });
-        Ok(Json(json_response))
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err getting tx receipt: {}", err)
+            });
+            Ok(Json(json_response))
+        }
     }
 }

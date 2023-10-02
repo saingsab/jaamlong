@@ -215,21 +215,6 @@ impl Transaction {
         })
     }
 
-    pub async fn update_status(
-        pool: &Pool<Postgres>,
-        id: Uuid,
-        tx_status: Uuid,
-    ) -> Result<PgQueryResult, sqlx::Error> {
-        let result = sqlx::query!(
-            "UPDATE tbl_transactions SET tx_status = $1, updated_at = NOW() WHERE id = $2",
-            tx_status,
-            id
-        )
-        .execute(pool)
-        .await?;
-        Ok(result)
-    }
-
     pub async fn update_tx_hash(
         pool: &Pool<Postgres>,
         id: Uuid,
