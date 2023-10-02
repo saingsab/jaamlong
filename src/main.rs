@@ -4,8 +4,8 @@ pub mod routers;
 pub mod utils;
 
 use crate::routers::{
-    network_routes::network_routes, token_address_routes::token_address_routes,
-    transaction_routes::transaction_routes,
+    hsm_routes::sign_tx_routes, network_routes::network_routes,
+    token_address_routes::token_address_routes, transaction_routes::transaction_routes,
 };
 use axum::{
     http::{
@@ -16,6 +16,7 @@ use axum::{
 };
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use std::sync::Arc;
+use tokio::task;
 use tower_http::cors::CorsLayer;
 
 pub struct AppState {
@@ -54,10 +55,28 @@ async fn main() -> anyhow::Result<()> {
             db: pool.clone(),
         })))
         .layer(cors);
-    println!("🚀 Server started successfully");
-    axum::Server::bind(&"0.0.0.0:8000".parse().unwrap())
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let cors2 = CorsLayer::new()
+        .allow_origin("http://localhost:7000".parse::<HeaderValue>().unwrap())
+        .allow_methods([Method::GET, Method::POST])
+        .allow_credentials(true)
+        .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE]);
+    let app2 = Router::new().merge(sign_tx_routes()).layer(cors2);
+    println!("🚀 Server started successfully, port 8000");
+    println!("🚀 HSM Server started successfully, port 7000");
+    let server1 = task::spawn(async move {
+        axum::Server::bind(&"0.0.0.0:8000".parse().unwrap())
+            .serve(app.into_make_service())
+            .await
+            .unwrap();
+    });
+    let server2 = task::spawn(async move {
+        axum::Server::bind(&"0.0.0.0:7000".parse().unwrap())
+            .serve(app2.into_make_service())
+            .await
+            .unwrap();
+    });
+    server1.await.unwrap();
+    server2.await.unwrap();
+
     Ok(())
 }
