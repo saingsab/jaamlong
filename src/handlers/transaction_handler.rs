@@ -854,7 +854,7 @@ pub async fn broadcast_tx(
                 "status": "fail",
                 "data": format!("Err updating tx: {}", err)
             });
-            return Ok(Json(json_response));
+            Ok(Json(json_response))
         }
     }
 }
@@ -932,14 +932,14 @@ pub async fn update_tx_status(
                     payload.status,
                 )
             });
-            return Ok(Json(json_response));
+            Ok(Json(json_response))
         }
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
                 "data": format!("Err updating status: {}", err)
             });
-            return Ok(Json(json_response));
+            Ok(Json(json_response))
         }
     }
 }
