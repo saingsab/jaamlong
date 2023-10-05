@@ -50,6 +50,12 @@ pub struct TransactionHash {
     hash: String,
 }
 
+#[derive(Deserialize)]
+pub struct TransactionUpdate {
+    id: Uuid,
+    status: String,
+}
+
 pub async fn request_tx(
     State(data): State<Arc<AppState>>,
     Json(payload): Json<RequestedTransaction>,
@@ -268,7 +274,7 @@ pub async fn request_tx(
         }
     };
     let tx_status = RequestInsertTxStatus {
-        status_name: String::from("Unconfirmed"),
+        status_name: String::from("unconfirmed"),
         created_by: Some(Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
             payload.sender_address.clone().as_bytes(),
@@ -720,7 +726,7 @@ pub async fn broadcast_tx(
     // validate transaction status from db
     match TransactionStatus::get_transaction_status(&data.db, tx_status_id).await {
         Ok(tx_status) => {
-            if tx_status.status_name != "Unconfirmed" && tx_status.status_name != "Pending" {
+            if tx_status.status_name != "unconfirmed" && tx_status.status_name != "pending" {
                 let json_response = serde_json::json!({
                     "status": "fail",
                     "data": format!(
@@ -745,7 +751,7 @@ pub async fn broadcast_tx(
         }
     }
     // update tx status to pending
-    match TransactionStatus::update_status(&data.db, tx_status_id, "Pending".to_string()).await {
+    match TransactionStatus::update_status(&data.db, tx_status_id, "pending".to_string()).await {
         Ok(tx_status) => {
             println!("Updated Status: {:#?}", tx_status);
         }
@@ -795,10 +801,7 @@ pub async fn broadcast_tx(
     // ============ WILL MOVE TO HSM SIGN TX MACHANISM =================
     let tx: H256 = if to_token.asset_type == "0" {
         match send_raw_tx(&data.db, &transaction).await {
-            Ok(tx_hash) => {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                tx_hash
-            }
+            Ok(tx_hash) => tx_hash,
             Err(err) => {
                 let json_response = serde_json::json!({
                     "status": "fail",
@@ -809,10 +812,7 @@ pub async fn broadcast_tx(
         }
     } else if to_token.asset_type == "1" {
         match send_erc20(&data.db, &transaction).await {
-            Ok(tx_hash) => {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                tx_hash
-            }
+            Ok(tx_hash) => tx_hash,
             Err(err) => {
                 let json_response = serde_json::json!({
                     "status": "fail",
@@ -828,20 +828,8 @@ pub async fn broadcast_tx(
         });
         return Ok(Json(json_response));
     };
-    // get transaciton receipt from hash
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    let new_tx_receipt = match get_tx(&data.db, destination_network, format!("{:?}", tx)).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            let json_response = serde_json::json!({
-                "status": "fail",
-                "tx_hash": format!("{}", tx),
-                "data": format!("Error getting transaction: {}", err)
-            });
-            return Ok(Json(json_response));
-        }
-    };
     //insert destination hash to db
+    println!("New Tx Hash: {:#?}", &tx);
     match Transaction::update_tx_hash(
         &data.db,
         transaction.id,
@@ -852,6 +840,14 @@ pub async fn broadcast_tx(
     {
         Ok(updated_tx) => {
             println!("Update tx: {:?}", updated_tx);
+            let json_response = serde_json::json!({
+                "status": "success",
+                "data": {
+                    "Transaction ID": payload.id,
+                    "Transaction hash": tx,
+                }
+            });
+            Ok(Json(json_response))
         }
         Err(err) => {
             let json_response = serde_json::json!({
@@ -861,139 +857,89 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     }
-    println!("New Tx: {:#?}", &new_tx_receipt);
-    //check block confirmation
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    match get_confirmed_block(
-        &data.db,
-        destination_network,
-        BlockId::Hash(new_tx_receipt.block_hash.expect("Failed to get block hash")),
-    )
-    .await
-    {
-        Ok(num_block_confirmation) => {
-            //check if block_confirmation is greater than 2. Negative numbers return None
-            match &num_block_confirmation.checked_sub(U64::from(2)) {
-                Some(_block_num) => {
-                    println!(
-                        "Success, Number of Confirmation Blocks: {}",
-                        &num_block_confirmation,
-                    );
-                }
-                None => {
-                    println!("Block confirmation: {:#?}", num_block_confirmation);
-                    let json_response = serde_json::json!({
-                        "status": "fail",
-                        "data": format!("Block confirmation less than 2")
-                    });
-                    return Ok(Json(json_response));
-                }
+}
+
+pub async fn update_tx_status(
+    State(data): State<Arc<AppState>>,
+    Json(payload): Json<TransactionUpdate>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    // input validation
+    if payload.status != "success" && payload.status != "fail" {
+        let json_response = serde_json::json!({
+            "status": "fail",
+            "data": "Status only support `Success` and `Fail`"
+        });
+        return Ok(Json(json_response));
+    }
+    // query transaction from db
+    let transaction_status = match Transaction::get_transaction(&data.db, payload.id).await {
+        Ok(tx) => match tx.tx_status {
+            Some(status) => status,
+            None => {
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": "Status Not Found"
+                });
+                return Ok(Json(json_response));
             }
+        },
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Err getting Tx: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    // validate transaction status from db
+    match TransactionStatus::get_transaction_status(&data.db, transaction_status).await {
+        Ok(tx_status) => {
+            if tx_status.status_name != "pending" {
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": format!(
+                        "Transaction ID: {} has already updated the status to: {}",
+                        &payload.id,
+                        tx_status.status_name,
+                    )
+                });
+                return Ok(Json(json_response));
+            }
+            println!(
+                "Transaciton ID: {}, \nStatus: {:#?}",
+                &payload.id, tx_status.status_name
+            );
         }
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": format!("Err Getting Block Confirmation: {}", err)
+                "data": format!("Failed to find tx status: {}", err)
             });
             return Ok(Json(json_response));
         }
     }
-    // validation tx receipt status
-    match get_tx_receipt(&data.db, destination_network, format!("{:?}", tx)).await {
-        Ok(tx) => {
-            match tx.status {
-                Some(status) => {
-                    if status == U64::from(1) {
-                        //update tx status to success
-                        match TransactionStatus::update_status(
-                            &data.db,
-                            tx_status_id,
-                            "Success".to_string(),
-                        )
-                        .await
-                        {
-                            Ok(_status) => {
-                                let json_response = serde_json::json!({
-                                    "status": "success",
-                                    "data": {
-                                        "Transaction ID": payload.id,
-                                        "Transaction hash": tx.transaction_hash,
-                                        "Transaction status": "success"
-                                    }
-                                });
-                                Ok(Json(json_response))
-                            }
-                            Err(err) => {
-                                let json_response = serde_json::json!({
-                                    "status": "fail",
-                                    "data": format!("Err Updating Tx Status: {}", err)
-                                });
-                                Ok(Json(json_response))
-                            }
-                        }
-                    } else if status == U64::from(0) {
-                        //update tx status to fail
-                        match TransactionStatus::update_status(
-                            &data.db,
-                            tx_status_id,
-                            "Fail".to_string(),
-                        )
-                        .await
-                        {
-                            Ok(_status) => {
-                                let json_response = serde_json::json!({
-                                    "status": "fail",
-                                    "data": {
-                                        "Transaction ID": payload.id,
-                                        "Transaction hash": tx.transaction_hash,
-                                        "Transaction Status": "Fail"
-                                    }
-                                });
-                                Ok(Json(json_response))
-                            }
-                            Err(err) => {
-                                let json_response = serde_json::json!({
-                                    "status": "fail",
-                                    "data": {
-                                        "tx_id": payload.id,
-                                        "message": format!("Err Updating Tx Status: {}", err)
-                                    }
-                                });
-                                return Ok(Json(json_response));
-                            }
-                        }
-                    } else {
-                        let json_response = serde_json::json!({
-                            "status": "fail",
-                            "data": {
-                                "tx_id": payload.id,
-                                "message": "Error: Status not Found"
-                            }
-                        });
-                        return Ok(Json(json_response));
-                    }
-                }
-                None => {
-                    let json_response = serde_json::json!({
-                        "status": "fail",
-                        "data": {
-                            "tx_id": payload.id,
-                            "message": "Error: Status not Found"
-                        }
-                    });
-                    Ok(Json(json_response))
-                }
-            }
+    // update tx status to pending
+    match TransactionStatus::update_status(&data.db, transaction_status, payload.status.clone())
+        .await
+    {
+        Ok(tx_status) => {
+            println!("Updated Status: {:#?}", tx_status);
+            let json_response = serde_json::json!({
+                "status": "sucess",
+                "data": format!(
+                    "Transaction ID: {} updated status successfully to: {}",
+                    &payload.id,
+                    payload.status,
+                )
+            });
+            return Ok(Json(json_response));
         }
         Err(err) => {
             let json_response = serde_json::json!({
                 "status": "fail",
-                "data": {
-                    "tx_id": payload.id,
-                    "message": format!("Err getting tx receipt: {}", err)
-                }
+                "data": format!("Err updating status: {}", err)
             });
-            Ok(Json(json_response))
+            return Ok(Json(json_response));
         }
     }
 }
