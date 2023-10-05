@@ -43,11 +43,9 @@ pub async fn auth<B>(
                 .get(header::AUTHORIZATION)
                 .and_then(|auth_header| auth_header.to_str().ok())
                 .and_then(|auth_value| {
-                    if auth_value.starts_with("Bearer ") {
-                        Some(auth_value[7..].to_owned())
-                    } else {
-                        None
-                    }
+                    auth_value
+                        .strip_prefix("Bearer ")
+                        .map(|bearer| bearer.to_owned())
                 })
         });
 
