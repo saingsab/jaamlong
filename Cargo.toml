@@ -24,3 +24,4 @@ secp256k1 = "0.27.0"
 bigdecimal = { version = "0.4.1", features = ["serde"]}
 jsonwebtoken = "8.3.0"
 rlp = "0.5.2"
+axum-extra = { version = "0.8.0", features = ["cookie"] }

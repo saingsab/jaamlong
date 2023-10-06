@@ -500,9 +500,11 @@ pub async fn send_erc20(pool: &Pool<Postgres>, transaction: &Transaction) -> Res
         Err(err) => return Err(Error::msg(format!("Error parsing body: {:?}", err))),
     };
     let client = reqwest::Client::new();
+    let jwt_token = dotenvy::var("JWT_TOKEN").expect("JWT token must be set");
     let res = client
         .post("http://127.0.0.1:7000/sign-erc20-tx")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::AUTHORIZATION, jwt_token)
         .body(json_body)
         .send()
         .await?;
@@ -582,9 +584,11 @@ pub async fn send_raw_tx(pool: &Pool<Postgres>, transaction: &Transaction) -> Re
         Err(err) => return Err(Error::msg(format!("Error parsing body: {:?}", err))),
     };
     let client = reqwest::Client::new();
+    let jwt_token = dotenvy::var("JWT_TOKEN").expect("JWT token must be set");
     let res = client
         .post("http://127.0.0.1:7000/sign-raw-tx")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::AUTHORIZATION, jwt_token)
         .body(json_body)
         .send()
         .await?;
