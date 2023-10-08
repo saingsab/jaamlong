@@ -1,5 +1,6 @@
 use crate::models::{network::Network, token_address::TokenAddress, transaction::Transaction};
 use anyhow::Error;
+use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::types::Json;
@@ -500,11 +501,21 @@ pub async fn send_erc20(pool: &Pool<Postgres>, transaction: &Transaction) -> Res
         Err(err) => return Err(Error::msg(format!("Error parsing body: {:?}", err))),
     };
     let client = reqwest::Client::new();
-    let jwt_token = dotenvy::var("JWT_TOKEN").expect("JWT token must be set");
+    let jwt_token = match generate_key().await {
+        Ok(token) => token,
+        Err(err) => return Err(err),
+    };
+    let path = match dotenvy::var("PATH_RAW") {
+        Ok(path) => path,
+        Err(err) => return Err(err.into()),
+    };
     let res = client
-        .post("http://127.0.0.1:7000/sign-erc20-tx")
+        .post(format!("{}/sign-erc20-tx", path))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::AUTHORIZATION, jwt_token)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", jwt_token),
+        )
         .body(json_body)
         .send()
         .await?;
@@ -584,11 +595,21 @@ pub async fn send_raw_tx(pool: &Pool<Postgres>, transaction: &Transaction) -> Re
         Err(err) => return Err(Error::msg(format!("Error parsing body: {:?}", err))),
     };
     let client = reqwest::Client::new();
-    let jwt_token = dotenvy::var("JWT_TOKEN").expect("JWT token must be set");
+    let jwt_token = match generate_key().await {
+        Ok(token) => token,
+        Err(err) => return Err(err),
+    };
+    let path = match dotenvy::var("PATH_RAW") {
+        Ok(path) => path,
+        Err(err) => return Err(err.into()),
+    };
     let res = client
-        .post("http://127.0.0.1:7000/sign-raw-tx")
+        .post(format!("{}/sign-raw-tx", path))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::AUTHORIZATION, jwt_token)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", jwt_token),
+        )
         .body(json_body)
         .send()
         .await?;
@@ -620,4 +641,40 @@ async fn broadcast_tx(network_rpc: String, rlp: Bytes) -> Result<H256, Error> {
         Err(err) => return Err(Error::msg(format!("Error broadcast: {}", err))),
     };
     Ok(tx_hash)
+}
+
+pub async fn generate_key() -> Result<String, Error> {
+    // Assuming these are the valid credentials for demonstration purposes
+    let public_key = match dotenvy::var("PUBLIC_KEY") {
+        Ok(p) => p,
+        Err(err) => {
+            return Err(err.into());
+        }
+    };
+    let secret_key = dotenvy::var("SECRET_KEY").expect("Secret key cannot be empty");
+    let now = chrono::Utc::now();
+    let iat = now.timestamp() as usize;
+    let exp = (now + chrono::Duration::minutes(1)).timestamp() as usize;
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Claims {
+        sub: String,
+        role: String,
+        iat: usize,
+        exp: usize,
+    }
+    // Generate a JWT token
+    let claims = Claims {
+        sub: public_key,
+        role: "admin".to_string(),
+        iat,
+        exp,
+    };
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret_key.as_ref()),
+    )
+    .unwrap();
+
+    Ok(token)
 }
