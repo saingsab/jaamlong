@@ -838,7 +838,7 @@ pub async fn broadcast_tx(
         });
         return Ok(Json(json_response));
     };
-    //insert destination hash to db
+    //insert destination hash to database
     println!("New Tx Hash: {:#?}", &tx);
     match Transaction::update_tx_hash(
         &data.db,
