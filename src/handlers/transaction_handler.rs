@@ -400,6 +400,53 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     };
+    // validate transaction status from db
+    let tx_status_id = match transaction.tx_status {
+        Some(tx_status) => tx_status,
+        None => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": "Tx Status Not Found"
+            });
+            return Ok(Json(json_response));
+        }
+    };
+    match TransactionStatus::get_transaction_status(&data.db, tx_status_id).await {
+        Ok(tx_status) => {
+            if tx_status.status_name == "pending" {
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": format!(
+                        "TransactionID: {} is {} state.",
+                        &payload.id,
+                        tx_status.status_name,
+                    )
+                });
+                return Ok(Json(json_response));
+            } else if tx_status.status_name != "unconfirmed" {
+                let json_response = serde_json::json!({
+                    "status": "fail",
+                    "data": format!(
+                        "TransactionID: {} has been {}.",
+                        &payload.id,
+                        tx_status.status_name,
+                    )
+                });
+                return Ok(Json(json_response));
+            }
+            println!(
+                "Transaciton ID: {}, \nStatus: {:#?}",
+                &payload.id, tx_status.status_name
+            );
+        }
+        Err(err) => {
+            let json_response = serde_json::json!({
+                "status": "fail",
+                "data": format!("Failed to find tx status: {}", err)
+            });
+            return Ok(Json(json_response));
+        }
+    }
     //validate destination network
     let destination_network = match transaction.destin_network {
         Some(network) => network,
@@ -552,43 +599,6 @@ pub async fn broadcast_tx(
             return Ok(Json(json_response));
         }
     };
-    // validate transaction status from db
-    let tx_status_id = match transaction.tx_status {
-        Some(tx_status) => tx_status,
-        None => {
-            let json_response = serde_json::json!({
-                "status": "fail",
-                "data": "Tx Status Not Found"
-            });
-            return Ok(Json(json_response));
-        }
-    };
-    match TransactionStatus::get_transaction_status(&data.db, tx_status_id).await {
-        Ok(tx_status) => {
-            if tx_status.status_name != "unconfirmed" && tx_status.status_name != "pending" {
-                let json_response = serde_json::json!({
-                    "status": "fail",
-                    "data": format!(
-                        "TransactionID: {} is not in Unconfirmed state. Current State: {}",
-                        &payload.id,
-                        tx_status.status_name,
-                    )
-                });
-                return Ok(Json(json_response));
-            }
-            println!(
-                "Transaciton ID: {}, \nStatus: {:#?}",
-                &payload.id, tx_status.status_name
-            );
-        }
-        Err(err) => {
-            let json_response = serde_json::json!({
-                "status": "fail",
-                "data": format!("Failed to find tx status: {}", err)
-            });
-            return Ok(Json(json_response));
-        }
-    }
     // perform validation between tx_receipt and tx_db
     if from_token.asset_type == "0" {
         // for native token type, get transaciton from hash
@@ -828,7 +838,7 @@ pub async fn broadcast_tx(
         });
         return Ok(Json(json_response));
     };
-    //insert destination hash to db
+    //insert destination hash to database
     println!("New Tx Hash: {:#?}", &tx);
     match Transaction::update_tx_hash(
         &data.db,

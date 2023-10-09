@@ -11,34 +11,8 @@ Add necessary variable to .env file. See .env.example necessary variables
 1. **Make up the user account:**
    - Inside the '.env' file, fill in the 
     </br>SECRET_KEY,
-    </br>USER_ID (Uuid),
-    </br>USERNAME,
-    </br>PASSWORD,
-    </br>\\with anything for now! (Will implement registration later)
-
-2. **Get Authentication Token:**
-   - As an admin, log in to the system to obtain an authentication token.
-Send POST request to http://127.0.0.1:7000/hsm/log-in with raw json body of 
-```
-{
-    "username": "test",
-    "password": "123"
-}
-```
-3. **Store the Token:**
-Response from log in request:
-```
-{
-    "data": "success",
-    "token": "AUTH_KEY"
-}
-```
-   - Copy the obtained token which is the AUTH_KEY.
-
-4. **Update .env file:**
-   - Open the `.env` file and set the token using the key `JWT_TOKEN`.
-   - Set the `PRIVATE_KEY` for bridge wallet
-   - Set the `PATH` for HSM path
+    </br>PUBLIC_KEY,
+    </br>PATH_RAW="http://127.0.0.1:7000"
 
 ## Broadcast Request Setup
 Send POST request to 127.0.0.1:8000/broadcast-tx with raw json body of 
